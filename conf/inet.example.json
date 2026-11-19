@@ -3,6 +3,7 @@
   "port": 18098,
   "property": {
     "enabled": false,
+    "profile": "database",
     "client.company": "M001",
     "client.key": "",
     "rest.port": 18099,

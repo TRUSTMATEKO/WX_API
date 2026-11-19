@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "WX 개발 DB Wallet API",
+    "title": "WX Wallet API",
     "version": "0.3.0",
     "description": "서울 기준 WX 장부 조회. HYPHEN 시험 전 기관 송금과 예금주 조회는 접수 중지."
   },
@@ -594,7 +594,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-WX-Key",
-        "description": "WX의 활성 test 키 및 연결 IP 범위로 고객사를 확인한다."
+        "description": "환경이 일치하는 WX의 활성 키와 등록 IP로 고객사를 확인한다. 기본 키 환경은 live다."
       }
     },
     "schemas": {

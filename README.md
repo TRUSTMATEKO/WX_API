@@ -1,12 +1,10 @@
 # WX_API
 
-Java 17 / Ant. T8_API에서 INet Router, 설정 로더, 제한된 전문 수신과 ctl → svc 구조를 참조했다. `ant compile`로 컴파일한다. `conf/inet.example.json`을 `conf/inet.json`으로 복사해 enabled와 키를 설정한 후 `ant run`으로 로컬 시연 수신을 시작한다.
+Java 17 / Ant. T8_API의 설정 로더와 ctl → svc 구조를 참조했다. `conf/inet.example.json`을 `conf/inet.json`으로 복사하고 enabled, rest.port, adm.port, adm.key를 설정한 뒤 `ant run`으로 시작한다. 기본 프로필은 database다.
 
 ## ADM 연계
 
-WX_ADM의 `conf/inet.json`을 활성화하고 `payout.key`를 API의 `adm.key`와 일치시킨다. 별도 `client.key`를 사용한다. 키는 서로 다르고 각각 32자 이상이어야 한다. 서버 설정의 `client.company`로 고객사 범위를 고정한다.
-
-`/api/internal/demo/payout`은 보호된 INet으로만 제공한다. 요청 JSON은 requestId, walletId, amount, recipient, outcome(success/failed/unknown)을 받는다. ADM이 소유권, API 운영시간, 잔액, 멱등성, 원장을 검증한다. 로컬 시연 포트는 기본 18098이다.
+ADM은 database 프로필로 기동하고 payout.key에 API의 adm.key를 지정한다. REST는 로컬 IPv4 직접 연결과 고객사·키의 등록 CIDR을 검증한다. ADM의 merchant.environment 기본값은 live이며 test 지정 시 테스트 키만 승인한다. 문의·잔액 조회는 고객사 범위를 적용한다.
 
 ## HYPHEN
 
@@ -21,6 +19,6 @@ WX_ADM의 `conf/inet.json`을 활성화하고 `payout.key`를 API의 `adm.key`�
 - [Wallet API HTML 문서](docs/index.html)
 - [OpenAPI 3.1 JSON](docs/wallet-rest.openapi.json)
 
-개발 WX REST는 API 전용 conf/inet.json의 property에 profile=database, enabled=true, rest.port, adm.port, adm.key를 설정해 실행한다. ADM은 database 프로필에서 -InternalConfig로 기동하며 payout.key에 API의 adm.key를 지정한다. TX24_LIB는 실행 폴더의 conf를 읽는다. 명시하려면 JVM에 -DCONF를 지정한다. 이 구성은 로컬 IPv4 직접 연결, 활성 test 키와 고객사·키의 등록 CIDR을 사용한다. 잔액 및 송금 장부 조회 계약은 docs/wallet-database.openapi.json이다. HYPHEN 시험 프로필과 응답코드 수령 전 송금·예금주 조회는 인증 후 503으로 끝난다.
+TX24_LIB의 설정 디렉터리는 JVM -DCONF로 지정할 수 있다. 잔액 및 송금 장부 조회 계약은 docs/wallet-database.openapi.json이다. HYPHEN 시험 프로필과 응답코드 수령 전 송금·예금주 조회는 인증 후 503으로 끝난다.
 
-로컬 REST는 rest.port 및 REST 전용 rest.key로 활성화한다. POST /api/v1/wallet/transfer와 /api/v1/wallet/holder가 같은 고객사 원장으로 연결된다. 신규 송금은 HUB_ADM과 동일하게 IDUtils.getUnique("T")로 체번한다. 샘플 통합 실행은 ../WX_ADM/tools/demo-stack.ps1, 세 프로젝트의 검증 인계는 ../WX_ADM/doc/claude-review.md를 사용한다.
+가상 원장의 회귀 검증은 명시적으로 profile=demo를 지정하고 rest.port 및 REST 전용 rest.key를 사용한다. POST /api/v1/wallet/transfer와 /api/v1/wallet/holder가 같은 고객사 원장으로 연결된다. 신규 송금은 HUB_ADM과 동일하게 IDUtils.getUnique("T")로 체번한다. 샘플 통합 실행은 ../WX_ADM/tools/demo-stack.ps1, 세 프로젝트의 검증 인계는 ../WX_ADM/doc/claude-review.md를 사용한다.

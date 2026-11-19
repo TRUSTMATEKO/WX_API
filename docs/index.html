@@ -82,6 +82,6 @@ h1,h2,h3{line-height:1.35}h1{margin:3px 0}h2{margin:2rem 0 .7rem}h3{margin:1.3re
 <p>로컬 수신 기본값은 <code>127.0.0.1:18098</code>, 대상은 <code>/api/internal/demo/payout</code>입니다. INet data에 <code>method=INet</code>, <code>x-wx-key</code>, JSON 문자열인 <code>payload</code>, 선택 사항인 <code>x-trace-id</code>를 넣습니다. 키에 연결된 고객사는 서버 설정으로 고정합니다. 응답의 업무 JSON은 INet data의 <code>response</code>에서 읽습니다.</p>
 <p>신규 가상 송금은 REST와 INet 모두 HUB 체번을 사용합니다. 이전 P로 시작하는 거래는 기존 요청번호로 재조회할 수 있습니다.</p>
 <h2 id="database">WX 데이터베이스 연동</h2>
-<p>고객사 테스트 키와 등록된 접속 IP를 확인합니다. 잔액 조회에는 <code>POST /api/v1/wallet/balance</code>와 <code>walletId</code>, 송금 장부 결과에는 <code>POST /api/v1/wallet/inquiry</code>와 <code>trxId</code>를 사용합니다. HYPHEN 시험자료 준비 전 송금과 예금주 조회는 인증 후 HTTP 503을 반환합니다. <a href="wallet-database.openapi.json">WX 데이터베이스 REST 규격</a></p>
+<p>서버의 키 환경에 맞는 고객사 키와 등록된 접속 IP를 확인합니다. 잔액 조회에는 <code>POST /api/v1/wallet/balance</code>와 <code>walletId</code>, 송금 장부 결과에는 <code>POST /api/v1/wallet/inquiry</code>와 <code>trxId</code>를 사용합니다. HYPHEN 시험자료 준비 전 송금과 예금주 조회는 인증 후 HTTP 503을 반환합니다. <a href="wallet-database.openapi.json">WX 데이터베이스 REST 규격</a></p>
 <footer>WX_API · 2026-11-19</footer>
 </article></main></div></body></html>

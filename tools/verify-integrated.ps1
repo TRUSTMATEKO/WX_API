@@ -29,8 +29,8 @@ function Config($Directory, $Value) {
     $Value | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 (Join-Path $Directory 'conf/inet.json')
 }
 Config $testAdm @{host='127.0.0.1'; port=$ports.adm; property=@{enabled=$true; 'payout.key'=$payoutKey; 'task.key'=$taskKey}}
-Config $testApi @{host='127.0.0.1'; port=$ports.api; property=@{enabled=$true; 'client.company'='M001'; 'client.key'=$clientKey; 'rest.port'=$ports.rest; 'rest.key'=$restKey; 'adm.port'=$ports.adm; 'adm.key'=$payoutKey}}
-Config $testTask @{host='127.0.0.1'; basePackage='kr.tx24.wx.task'; property=@{enabled=$true; 'adm.port'=$ports.adm; 'adm.key'=$taskKey}}
+Config $testApi @{host='127.0.0.1'; port=$ports.api; property=@{enabled=$true; profile='demo'; 'client.company'='M001'; 'client.key'=$clientKey; 'rest.port'=$ports.rest; 'rest.key'=$restKey; 'adm.port'=$ports.adm; 'adm.key'=$payoutKey}}
+Config $testTask @{host='127.0.0.1'; basePackage='kr.tx24.wx.task'; property=@{enabled=$true; profile='demo'; 'adm.port'=$ports.adm; 'adm.key'=$taskKey}}
 Copy-Item -LiteralPath (Join-Path $adm 'webroot') -Destination $testAdm -Recurse
 function StartWx($Project, $Directory, $Main, $Options = @()) {
     $cp = '"' + $Project + '/out/classes;' + $Project + '/lib/*"'
@@ -54,7 +54,7 @@ function WaitLocal($Port, $Process) {
 }
 $processes = @()
 try {
-    $admProcess = StartWx $adm $testAdm 'kr.tx24.wx.main.Launcher' @("-Dwx.port=$($ports.web)")
+    $admProcess = StartWx $adm $testAdm 'kr.tx24.wx.main.Launcher' @('-Dwx.profile=demo',"-Dwx.port=$($ports.web)")
     $processes += $admProcess
     WaitLocal $ports.adm $admProcess
     $base = "http://127.0.0.1:$($ports.web)"
@@ -90,6 +90,14 @@ try {
     Write-Output 'PASS REST authentication, trace, HUB identifiers and HTTP/INet replay'
     Push-Location $testTask
     try {
+        Config $testTask @{host='127.0.0.1'; basePackage='kr.tx24.wx.task'; property=@{enabled=$true; 'adm.port'=$ports.adm; 'adm.key'=$taskKey}}
+        java -cp "$task/out/classes;$task/lib/*" kr.tx24.wx.task.Launcher --once 2>&1 | Out-Null
+        $reachedAdm = Select-String -Path (Join-Path $testAdm 'stdout.log') -SimpleMatch '/api/internal/wallet/aggregate'
+        if ($LASTEXITCODE -ne 1 -or !$reachedAdm) {
+            throw '실행 모드가 일치하지 않는 TASK 접근 차단 실패'
+        }
+        Write-Output 'PASS 데이터베이스용 TASK가 가상 원장에 연결되면 거절'
+        Config $testTask @{host='127.0.0.1'; basePackage='kr.tx24.wx.task'; property=@{enabled=$true; profile='demo'; 'adm.port'=$ports.adm; 'adm.key'=$taskKey}}
         java -cp "$task/out/classes;$task/lib/*" kr.tx24.wx.task.Launcher --once
         if ($LASTEXITCODE -ne 0) { throw 'TASK 일별 집계 연계 실패' }
     } finally { Pop-Location }

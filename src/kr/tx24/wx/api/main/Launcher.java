@@ -17,7 +17,7 @@ public final class Launcher {
     /** WX_API 전용 INet 라우트를 PC 내부 주소로 시작한다. */
     public static void main(String[] args) throws Exception {
 
-        if (!Files.isRegularFile(Path.of("conf/inet.json"))) {
+        if (!Files.isRegularFile(SystemUtils.getINetConfigPath())) {
             throw new IllegalStateException("conf/inet.json 설정이 필요합니다.");
         }
         System.setProperty("PROC", "WX_API");
@@ -25,8 +25,12 @@ public final class Launcher {
         INetConfigLoader.start();
         SharedMap<String, Object> property = INetConfigLoader.getMap("property", TypeRegistry.MAP_SHAREDMAP_OBJECT);
         if (property == null || !property.getBoolean("enabled")) {
-            throw new IllegalStateException("WX_API 시연 수신이 비활성입니다.");
+            throw new IllegalStateException("WX_API가 비활성입니다.");
         }
+        String profile = property.getString("profile","database");
+        if (!java.util.Set.of("database","demo").contains(profile))
+            throw new IllegalStateException("profile은 database 또는 demo여야 합니다.");
+        property.put("profile",profile);
         if (property.isEquals("profile","database")) {
             if (property.getString("adm.key").length()<32) throw new IllegalStateException("WX_ADM 내부 키가 필요합니다.");
             try (var rest = new kr.tx24.wx.api.ctl.WalletRestApi(property)) {
