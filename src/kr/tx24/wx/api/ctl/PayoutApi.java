@@ -41,10 +41,23 @@ public final class PayoutApi {
     @Route(target = {"/payout"}, loggable = false)
     public INet payout() {
 
+        return submit("payout");
+    }
+
+    /** /api/internal/demo/holder에서 확인한 예금주 조회 결과를 시연한다. */
+    @Route(target = {"/holder"}, loggable = false)
+    public INet holder() {
+
+        return submit("holder");
+    }
+
+    /** 인증된 호출 경로와 요청을 WX 원장에 전달한다. */
+    private INet submit(String action) {
+
         try {
             var input = InternalInetUtils.receive(channel, request, "127.0.0.1",
                     "x-wx-key", config.getString("client.key"), 8192);
-            var data = service.submit(input, request.data().getString("x-trace-id"));
+            var data = service.submit(action, input, request.data().getString("x-trace-id"));
             return InternalInetUtils.response(request, data);
         } catch (Exception failure) {
             return InternalInetUtils.response(request, InternalInetUtils.error("REJECTED", "접수 응답을 확인하세요."));

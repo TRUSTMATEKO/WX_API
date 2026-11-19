@@ -27,6 +27,15 @@ public final class Launcher {
         if (property == null || !property.getBoolean("enabled")) {
             throw new IllegalStateException("WX_API 시연 수신이 비활성입니다.");
         }
+        if (property.isEquals("profile","database")) {
+            if (property.getString("adm.key").length()<32) throw new IllegalStateException("WX_ADM 내부 키가 필요합니다.");
+            try (var rest = new kr.tx24.wx.api.ctl.WalletRestApi(property)) {
+                var released = new CountDownLatch(1);
+                Runtime.getRuntime().addShutdownHook(new Thread(released::countDown));
+                released.await();
+            }
+            return;
+        }
         PayoutApi.configure(property);
         Router.start("kr.tx24.wx.api.ctl");
 
@@ -34,7 +43,8 @@ public final class Launcher {
         if (port < 1 || port > 65535) {
             throw new IllegalStateException("WX_API INet 포트를 확인하세요.");
         }
-        try (var server = new InternalInetServer("127.0.0.1", port, "127.0.0.1")) {
+        try (var server = new InternalInetServer("127.0.0.1", port, "127.0.0.1");
+             var rest = property.getInt("rest.port") > 0 ? new kr.tx24.wx.api.ctl.WalletRestApi(property) : null) {
             server.start();
             var released = new CountDownLatch(1);
             Runtime.getRuntime().addShutdownHook(new Thread(released::countDown));

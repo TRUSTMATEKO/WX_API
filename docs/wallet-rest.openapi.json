@@ -1,0 +1,620 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WX Wallet API",
+    "version": "0.2.0",
+    "description": "로컬 REST와 INet을 통한 가상 송금 및 예금주 조회입니다. 신규 송금은 HUB 체번을 사용합니다."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:18099",
+      "description": "rest.port와 전용 키를 설정한 로컬 서버"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Wallet API",
+      "description": "인증된 고객사의 Wallet 가상 송금 접수입니다."
+    }
+  ],
+  "x-status": "local-demo",
+  "x-current-transport": {
+    "protocol": "INet",
+    "target": "/api/internal/demo/payout",
+    "listener": "127.0.0.1:18098",
+    "transactionIdPattern": "^T[0-9]{11}[0-9A-F]{6}$"
+  },
+  "paths": {
+    "/api/v1/wallet/holder": {
+      "post": {
+        "tags": ["Wallet API"],
+        "operationId": "walletHolder",
+        "summary": "예금주 조회 결과 시연",
+        "security": [{"WalletKey": []}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+          "type": "object", "additionalProperties": false, "required": ["requestId","walletId","outcome"],
+          "properties": {"requestId":{"type":"string","maxLength":80},"walletId":{"type":"string"},"outcome":{"enum":["matched","mismatch","unknown"]}}
+        }}}},
+        "responses": {
+          "200":{"description":"시연 결과","content":{"application/json":{"schema":{"type":"object","required":["result","traceId","data"],"properties":{
+            "result":{"const":true},"traceId":{"type":"string"},"data":{"type":"object","properties":{"id":{"type":"string"},"replayed":{"type":"boolean"},"outcome":{"enum":["matched","mismatch","unknown"]}}}
+          }}}}},
+          "default":{"description":"공통 오류","content":{"application/json":{"schema":{"$ref":"#/components/schemas/WalletError"}}}}
+        }
+      }
+    },
+    "/api/v1/wallet/transfer": {
+      "post": {
+        "tags": [
+          "Wallet API"
+        ],
+        "summary": "Wallet 가상 송금 접수",
+        "operationId": "walletTransfer",
+        "description": "인증 키에 연결된 고객사 소유의 Wallet을 사용합니다. 신규 접수 전 API 중지시간과 잔액을 검사합니다. 동일 고객사에서 같은 requestId와 요청 내용으로 다시 호출하면 저장된 거래번호를 반환하며 원장을 다시 반영하지 않습니다. outcome은 시연을 위한 입력입니다.",
+        "security": [
+          {
+            "WalletKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Trace-Id",
+            "in": "header",
+            "required": false,
+            "description": "영숫자 8자리만 재사용. 누락 또는 형식 불일치 시 서버가 발급합니다.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{8}$",
+              "example": "WXAPI001"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "UTF-8 JSON 객체. 최대 8,192바이트.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferRequest"
+              },
+              "example": {
+                "requestId": "WX-20261119-0001",
+                "walletId": "W001",
+                "amount": "1000",
+                "recipient": "가상 수취인",
+                "outcome": "success"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "원장 접수 완료 또는 동일 요청 재응답. 실제 기관 송금 결과를 나타내지 않습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferAccepted"
+                },
+                "examples": {
+                  "accepted": {
+                    "value": {
+                      "result": true,
+                      "traceId": "WXAPI001",
+                      "data": {
+                        "id": "T65000000000A1B2C3",
+                        "replayed": false
+                      }
+                    }
+                  },
+                  "replayed": {
+                    "value": {
+                      "result": true,
+                      "traceId": "WXAPI001",
+                      "data": {
+                        "id": "T65000000000A1B2C3",
+                        "replayed": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "필수 입력이 없거나 금액 또는 시연 결과 값이 올바르지 않습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX400"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX400",
+                      "message": "필수 입력이 없거나 금액 또는 시연 결과 값이 올바르지 않습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "REST 연동 키가 없거나 올바르지 않습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "REJECTED"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "REJECTED",
+                      "message": "REST 연동 키가 없거나 올바르지 않습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "다른 고객사의 Wallet에는 접근할 수 없습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX403"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX403",
+                      "message": "다른 고객사의 Wallet에는 접근할 수 없습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "요청한 Wallet을 찾을 수 없습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX404"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX404",
+                      "message": "요청한 Wallet을 찾을 수 없습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "요청번호 충돌, API 중지시간, Wallet 또는 본사 모계좌 송금 가능 잔액 부족.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX409"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX409",
+                      "message": "같은 요청번호의 내용이 다릅니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  },
+                  "stopped": {
+                    "value": {
+                      "result": false,
+                      "code": "TX409",
+                      "message": "API 중지시간입니다. 신규 송금을 접수할 수 없습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  },
+                  "walletBalance": {
+                    "value": {
+                      "result": false,
+                      "code": "TX409",
+                      "message": "Wallet 잔액이 부족합니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  },
+                  "bankBalance": {
+                    "value": {
+                      "result": false,
+                      "code": "TX409",
+                      "message": "본사 모계좌의 송금 가능 잔액이 부족합니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "요청 본문은 UTF-8 기준 8,192바이트 이하여야 합니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX400"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX400",
+                      "message": "요청 본문은 UTF-8 기준 8,192바이트 이하여야 합니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type은 application/json이어야 합니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "TX400"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "TX400",
+                      "message": "Content-Type은 application/json이어야 합니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "접수 결과를 확인할 수 없습니다.",
+            "headers": {
+              "X-Trace-Id": {
+                "description": "응답 본문과 동일한 HTTP 요청 추적번호",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]{8}$",
+                  "example": "WXAPI001"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/WalletError"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "REJECTED"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "examples": {
+                  "example": {
+                    "value": {
+                      "result": false,
+                      "code": "REJECTED",
+                      "message": "접수 결과를 확인할 수 없습니다.",
+                      "traceId": "WXAPI001"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request POST 'https://wx-api.example.invalid/api/v1/wallet/transfer' \\\n  --header 'Content-Type: application/json' \\\n  --header 'Accept: application/json' \\\n  --header 'X-WX-Key: <발급된 REST 키>' \\\n  --header 'X-Trace-Id: WXAPI001' \\\n  --data '{\"requestId\":\"WX-20261119-0001\",\"walletId\":\"W001\",\"amount\":\"1000\",\"recipient\":\"가상 수취인\",\"outcome\":\"success\"}'"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "WalletKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-WX-Key",
+        "description": "REST 연동용 키. 키에 매핑된 고객사로 거래 범위를 제한합니다. 현재 시연 INet의 관리자 연결 키와는 별개입니다."
+      }
+    },
+    "schemas": {
+      "TransferRequest": {
+        "type": "object",
+        "required": [
+          "requestId",
+          "walletId",
+          "amount",
+          "recipient",
+          "outcome"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "고객사 요청번호. 앞뒤 공백을 제외하고 1~80자. 같은 요청을 재시도할 때 재사용."
+          },
+          "walletId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "고객사 소유의 Wallet ID."
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,11}$",
+            "description": "원 단위 정수 문자열. 1~999,999,999,999원. 선행 0·쉼표·소수점 입력 불가."
+          },
+          "recipient": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "시연 수취인 표시명. 앞뒤 공백을 제외하고 1~80자."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "unknown"
+            ],
+            "description": "가상 송금 결과. success, failed, unknown 중 하나."
+          }
+        }
+      },
+      "TransferAccepted": {
+        "type": "object",
+        "required": [
+          "result",
+          "data",
+          "traceId"
+        ],
+        "properties": {
+          "result": {
+            "const": true
+          },
+          "traceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{8}$",
+            "example": "WXAPI001"
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "id",
+              "replayed"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^T[0-9]{11}[0-9A-F]{6}$",
+                "description": "WX 서버 거래번호. HUB_ADM과 동일한 TX24_LIB IDUtils.getUnique(\"T\") 체번 규칙을 사용합니다.",
+                "example": "T65000000000A1B2C3"
+              },
+              "replayed": {
+                "type": "boolean",
+                "description": "이미 접수된 동일 요청을 재응답하면 true."
+              }
+            }
+          }
+        }
+      },
+      "WalletError": {
+        "type": "object",
+        "required": [
+          "result",
+          "code",
+          "message",
+          "traceId"
+        ],
+        "properties": {
+          "result": {
+            "const": false
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "TX400",
+              "TX403",
+              "TX404",
+              "TX409",
+              "TX401", "TX405", "TX413", "TX415", "TX503", "REJECTED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{8}$",
+            "example": "WXAPI001"
+          }
+        }
+      }
+    }
+  }
+}

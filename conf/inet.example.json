@@ -5,6 +5,8 @@
     "enabled": false,
     "client.company": "M001",
     "client.key": "",
+    "rest.port": 18099,
+    "rest.key": "",
     "adm.port": 18097,
     "adm.key": ""
   }

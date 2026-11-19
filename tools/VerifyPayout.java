@@ -33,6 +33,17 @@ public final class VerifyPayout {
         if (send(args, input).getBoolean("result")) {
             throw new IllegalStateException("다른 고객사 Wallet의 지급이 접수됐습니다.");
         }
+        input.put("walletId", "W001");
+        for (String outcome : java.util.List.of("mismatch", "unknown")) {
+            input.put("outcome", outcome);
+            input.put("requestId", "WX-HOLDER-" + outcome);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                var reply = InternalInetUtils.call("127.0.0.1", Integer.parseInt(args[0]), "/api/internal/demo/holder",
+                        "x-wx-key", args[1], input, "WXAPI002", 5000, 8192);
+                if (!reply.getBoolean("result") || !reply.get("data").toString().contains("outcome=" + outcome))
+                    throw new IllegalStateException("예금주 조회 결과 기록 오류");
+            }
+        }
         System.out.println("PASS API INet payout, replay and merchant scope");
     }
 

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WX Wallet API · REST 규격</title>
+<style>
+:root{color-scheme:light dark;--ink:#172036;--muted:#495973;--bg:#f6f8fc;--panel:#fff;--line:#dbe3f0;--blue:#184fbc;--tag:#e8f0ff}
+@media(prefers-color-scheme:dark){:root{--ink:#edf3ff;--muted:#bbc8dc;--bg:#0e1523;--panel:#141f32;--line:#33425e;--blue:#9bbaff;--tag:#20375c}}
+*{box-sizing:border-box}html{scroll-padding-top:16px}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 system-ui,"Malgun Gothic",sans-serif}
+a{color:var(--blue)}header{background:var(--panel);border-bottom:1px solid var(--line)}header>div,.shell{max-width:1160px;margin:auto;padding:15px 24px}
+header>div{display:flex;justify-content:space-between;align-items:center;gap:12px}.shell{display:grid;grid-template-columns:180px minmax(0,1fr);gap:28px;padding-block:30px}
+nav{position:sticky;top:20px;align-self:start}nav a{display:block;padding:4px 0}article{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;min-width:0}
+h1,h2,h3{line-height:1.35}h1{margin:3px 0}h2{margin:2rem 0 .7rem}h3{margin:1.3rem 0 .5rem}p{margin:.6em 0}.tag{display:inline-block;border-radius:4px;background:var(--tag);color:var(--blue);padding:2px 8px;font-weight:650}.note{border-left:4px solid var(--blue);padding:8px 14px;background:var(--bg)}
+.table{overflow-x:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--bg)}pre{overflow:auto;padding:14px;background:var(--bg);border:1px solid var(--line);border-radius:7px;color:var(--ink)}code{font:0.94em ui-monospace,Consolas,monospace}footer{color:var(--muted);margin-top:20px}
+@media(max-width:680px){.shell{display:block;padding:14px}nav{position:static;margin-bottom:14px}nav a{display:inline-block;margin-right:12px}article{padding:16px}}
+</style>
+</head><body>
+<header><div><strong>WX API · Wallet API</strong><a href="./wallet-rest.openapi.json" download>OpenAPI 다운로드</a></div></header>
+<div class="shell"><nav aria-label="문서 목차"><strong>Wallet API</strong><a href="#overview">연동 안내</a><a href="#transfer">송금 접수</a><a href="#number">거래번호</a><a href="#errors">오류 코드</a><a href="#current">현재 INet 호출</a></nav>
+<main><article>
+<h1 id="overview">WX Wallet API</h1><p>REST 규격 v0.2.0 <span class="tag">로컬 시연</span></p>
+<p class="note">WX_API의 로컬 REST와 내부 INet은 같은 시연 원장을 사용합니다. 송금 성공과 결과가 확인된 예금주 조회가 과금 대상입니다.</p>
+<h2 id="transfer">Wallet 가상 송금 접수</h2>
+<p><span class="tag">POST</span> <code>/api/v1/wallet/transfer</code></p>
+<h3>요청 헤더</h3>
+<div class="table"><table><thead><tr><th>헤더</th><th>필수</th><th>설명</th></tr></thead><tbody>
+<tr><td><code>X-WX-Key</code></td><td>예</td><td>고객사 범위를 판별하는 REST 전용 키. 요청 본문으로 고객사를 지정할 수 없습니다.</td></tr>
+<tr><td><code>Content-Type</code></td><td>예</td><td><code>application/json</code>. UTF-8 기준 본문 최대 8,192바이트.</td></tr>
+<tr><td><code>X-Trace-Id</code></td><td>아니요</td><td>영숫자 8자리. 없거나 형식이 다르면 서버가 발급합니다. 응답 헤더와 본문의 값은 같습니다.</td></tr>
+</tbody></table></div>
+<h3>요청 필드</h3>
+<div class="table"><table><thead><tr><th>필드</th><th>타입</th><th>필수</th><th>설명</th></tr></thead><tbody>
+<tr><td><code>requestId</code></td><td>string</td><td>예</td><td>고객사 요청번호. 앞뒤 공백을 제외하고 1~80자. 같은 요청을 재시도할 때 재사용.</td></tr>
+<tr><td><code>walletId</code></td><td>string</td><td>예</td><td>고객사 소유의 Wallet ID.</td></tr>
+<tr><td><code>amount</code></td><td>string</td><td>예</td><td>원 단위 정수 문자열. 1~999,999,999,999원. 선행 0·쉼표·소수점 입력 불가.</td></tr>
+<tr><td><code>recipient</code></td><td>string</td><td>예</td><td>시연 수취인 표시명. 앞뒤 공백을 제외하고 1~80자.</td></tr>
+<tr><td><code>outcome</code></td><td>string</td><td>예</td><td>가상 송금 결과. success, failed, unknown 중 하나.</td></tr>
+</tbody></table></div>
+<h3>요청 예시</h3><pre><code>curl --request POST 'http://127.0.0.1:18099/api/v1/wallet/transfer' \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/json' \
+  --header 'X-WX-Key: &lt;발급된 REST 키&gt;' \
+  --header 'X-Trace-Id: WXAPI001' \
+  --data '{"requestId":"WX-20261119-0001","walletId":"W001","amount":"1000","recipient":"가상 수취인","outcome":"success"}'</code></pre>
+<h3>정상 응답</h3>
+<p>HTTP 200과 <code>result: true</code>는 가상 거래가 원장에 접수됐다는 뜻입니다. <code>outcome</code>의 시연 결과와 구분합니다. 성공은 원금과 후불 수수료를 반영하고, 확정 실패는 원금을 환입하며, 결과 불명은 원금을 예약한 상태로 남깁니다.</p>
+<pre><code>{
+  "result": true,
+  "traceId": "WXAPI001",
+  "data": {
+    "id": "T65000000000A1B2C3",
+    "replayed": false
+  }
+}</code></pre>
+<p>같은 고객사에서 동일한 <code>requestId</code>와 요청 내용으로 재호출하면 같은 거래번호와 <code>replayed: true</code>를 반환합니다. 원장 반영은 한 번만 이루어집니다. 같은 요청번호로 내용을 바꾸면 <code>TX409</code>입니다. 응답을 받지 못한 경우 새 번호를 발급하지 말고 원래 번호와 요청 내용을 유지하세요.</p>
+<h2 id="holder">예금주 조회 시연</h2><p><code>POST /api/v1/wallet/holder</code>는 같은 인증 헤더와 <code>requestId</code>, <code>walletId</code>, <code>outcome</code>을 받습니다. matched와 mismatch는 결과가 확인된 통신이며 unknown은 결과 미확인입니다. 본사가 설정한 단가를 적용하고 일별로 차감합니다.</p>
+<h2 id="number">거래번호 체계</h2>
+<div class="table"><table><thead><tr><th>항목</th><th>발급</th><th>역할</th></tr></thead><tbody>
+<tr><td><code>requestId</code></td><td>고객사</td><td>멱등성에 사용하는 요청번호.</td></tr>
+<tr><td><code>data.id</code></td><td>WX 서버</td><td>접수된 송금 거래의 고유 번호. HUB_ADM의 거래번호(<code>trxId</code>) 체번 방식을 적용합니다.</td></tr>
+<tr><td><code>traceId</code></td><td>호출자 또는 서버</td><td>8자리 요청 추적번호.</td></tr>
+</tbody></table></div>
+<p>REST 거래번호는 HUB_ADM과 같은 TX24_LIB <code>IDUtils.getUnique("T")</code>로 발급합니다. 구현 기준 총 18자로, <code>T</code> + epoch 밀리초 문자열의 인덱스 2부터 13 직전까지 11자리 + UUID 앞 6자리의 대문자 16진수입니다. 예시는 <code>T65000000000A1B2C3</code>입니다. 동일 요청 재응답에는 먼저 저장한 번호를 사용합니다. 기관 전문번호는 별도 식별자입니다.</p>
+<h2 id="errors">오류 코드</h2>
+<div class="table"><table><thead><tr><th>HTTP</th><th>코드</th><th>설명</th></tr></thead><tbody>
+<tr><td>400</td><td><code>TX400</code></td><td>필수 입력이 없거나 금액 또는 시연 결과 값이 올바르지 않습니다.</td></tr>
+<tr><td>401</td><td><code>TX401</code></td><td>REST 연동 키가 없거나 올바르지 않습니다.</td></tr>
+<tr><td>403</td><td><code>TX403</code></td><td>다른 고객사의 Wallet에는 접근할 수 없습니다.</td></tr>
+<tr><td>404</td><td><code>TX404</code></td><td>요청한 Wallet을 찾을 수 없습니다.</td></tr>
+<tr><td>409</td><td><code>TX409</code></td><td>요청번호 충돌, API 중지시간, Wallet 또는 본사 모계좌 송금 가능 잔액 부족.</td></tr>
+<tr><td>413</td><td><code>TX400</code></td><td>요청 본문은 UTF-8 기준 8,192바이트 이하여야 합니다.</td></tr>
+<tr><td>415</td><td><code>TX400</code></td><td>Content-Type은 application/json이어야 합니다.</td></tr>
+<tr><td>503</td><td><code>REJECTED</code></td><td>접수 결과를 확인할 수 없습니다.</td></tr>
+</tbody></table></div>
+<pre><code>{
+  "result": false,
+  "code": "TX409",
+  "message": "API 중지시간입니다. 신규 송금을 접수할 수 없습니다.",
+  "traceId": "WXAPI001"
+}</code></pre>
+<h2 id="current">현재 동작하는 INet 호출</h2>
+<p>로컬 수신 기본값은 <code>127.0.0.1:18098</code>, 대상은 <code>/api/internal/demo/payout</code>입니다. INet data에 <code>method=INet</code>, <code>x-wx-key</code>, JSON 문자열인 <code>payload</code>, 선택 사항인 <code>x-trace-id</code>를 넣습니다. 키에 연결된 고객사는 서버 설정으로 고정합니다. 응답의 업무 JSON은 INet data의 <code>response</code>에서 읽습니다.</p>
+<p>신규 가상 송금은 REST와 INet 모두 HUB 체번을 사용합니다. 이전 P로 시작하는 거래는 기존 요청번호로 재조회할 수 있습니다.</p>
+<h2 id="database">WX 데이터베이스 연동</h2>
+<p>고객사 테스트 키와 등록된 접속 IP를 확인합니다. 잔액 조회에는 <code>POST /api/v1/wallet/balance</code>와 <code>walletId</code>, 송금 장부 결과에는 <code>POST /api/v1/wallet/inquiry</code>와 <code>trxId</code>를 사용합니다. HYPHEN 시험자료 준비 전 송금과 예금주 조회는 인증 후 HTTP 503을 반환합니다. <a href="wallet-database.openapi.json">WX 데이터베이스 REST 규격</a></p>
+<footer>WX_API · 2026-11-19</footer>
+</article></main></div></body></html>
