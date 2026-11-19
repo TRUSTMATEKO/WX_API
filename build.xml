@@ -1,0 +1,14 @@
+<project name="WX_API" default="compile">
+    <path id="runtime"><fileset dir="lib" includes="*.jar"/></path>
+    <target name="compile">
+        <mkdir dir="out/classes"/>
+        <javac srcdir="src;shared" destdir="out/classes" release="17" encoding="UTF-8" includeantruntime="false">
+            <classpath refid="runtime"/>
+        </javac>
+    </target>
+    <target name="run" depends="compile">
+        <java classname="kr.tx24.wx.api.main.Launcher" fork="true" failonerror="true">
+            <classpath><pathelement location="out/classes"/><path refid="runtime"/></classpath>
+        </java>
+    </target>
+</project>

@@ -1,0 +1,10 @@
+/out/
+/data/
+/conf/inet.json
+/conf/code.json
+/.idea/workspace.xml
+/.claude/worktrees/
+*.log
+*.pem
+*.key
+.env*

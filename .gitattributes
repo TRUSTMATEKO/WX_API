@@ -1,0 +1,3 @@
+# 업체 원본의 SHA-256과 줄바꿈을 Git 체크아웃에서도 보존한다.
+src/kr/tx24/ext/hyphen/** -text
+src/kr/tx24/ext/ctl/ExtCode.java -text
