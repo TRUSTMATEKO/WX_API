@@ -1,8 +1,5 @@
 package kr.tx24.wx.api.ctl;
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import kr.tx24.lib.lang.IDUtils;
@@ -22,8 +19,6 @@ import java.util.concurrent.Executors;
 /** 로컬 Wallet REST와 INet이 같은 고객사 권한·원장·멱등성 계약을 사용한다. */
 public final class WalletRestApi implements AutoCloseable {
 
-    private final ObjectMapper reader = new ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
     private final PayoutSvc service;
     private final byte[] key;
     private final boolean database;
@@ -83,22 +78,9 @@ public final class WalletRestApi implements AutoCloseable {
     /** 송금·예금주 조회의 문자열 입력과 필수 필드를 확인하여 고객사 고정 경로로 전달한다. */
     private void submit(HttpExchange http, String action, byte[] bytes, String trace) throws IOException {
 
-        var input = SharedMap.<String, Object>of();
-        var fields = action.equals("payout") ? Set.of("requestId","walletId","amount","recipient","outcome")
-                : Set.of("requestId","walletId","outcome");
-        if (database) fields = switch (action) {
-            case "balance" -> Set.of("walletId");
-            case "inquiry" -> Set.of("trxId");
-            case "holder" -> Set.of("walletId","requestId","bankCode","account");
-            default -> Set.of("walletId","requestId","amount","bankCode","account","recipient");
-        };
+        SharedMap<String,Object> input;
         try {
-            var payload = reader.readTree(bytes);
-            if (payload == null || !payload.isObject() || payload.size() != fields.size()) throw new IllegalArgumentException();
-            for (String field : fields) {
-                if (!payload.path(field).isTextual() || payload.get(field).asText().isBlank()) throw new IllegalArgumentException();
-                input.put(field, payload.get(field).asText());
-            }
+            input = PayoutSvc.readPayload(action,bytes,database);
         } catch (IOException | IllegalArgumentException failure) {
             error(http, 400, "요청 JSON의 필드와 형식을 확인하세요.", trace);
             return;
@@ -106,30 +88,17 @@ public final class WalletRestApi implements AutoCloseable {
         SharedMap<String, Object> result;
         try {
             if (database) {
-                var query = SharedMap.<String,Object>of();
-                if (action.equals("inquiry")) query.put("trxId",input.getString("trxId"));
-                if (action.equals("balance")) query.put("walletId",input.getString("walletId"));
-                String hash = kr.tx24.lib.lang.CommonUtils.hashSHA256(http.getRequestHeaders().getFirst("X-WX-Key"));
-                result = service.merchant(action,query,hash,http.getRemoteAddress().getAddress().getHostAddress(),trace);
+                String peer = http.getRemoteAddress().getAddress().getHostAddress();
+                result = service.merchant(action,input,http.getRequestHeaders().getFirst("X-WX-Key"),peer,trace);
             } else result = service.submit(action,input,trace);
         } catch (Exception failure) {
             error(http, 503, "원장 응답을 확인하지 못했습니다. 동일 요청번호로 확인하세요.", trace);
             return;
         }
-        int status = 200;
-        if (!result.getBoolean("result")) {
-            status = switch (result.getString("code")) {
-                case "TX400" -> 400;
-                case "TX401" -> 401;
-                case "TX403" -> 403;
-                case "TX404" -> 404;
-                case "TX409" -> 409;
-                default -> 503;
-            };
-            if (status == 503 && !result.isEquals("code","TX503")) {
-                error(http, 503, "원장 응답을 확인하세요.", trace);
-                return;
-            }
+        int status = PayoutSvc.httpStatus(result);
+        if (status==503 && !result.isEquals("code","TX503")) {
+            error(http,503,"원장 응답을 확인하세요.",trace);
+            return;
         }
         result.put("traceId", trace);
         send(http, status, result);

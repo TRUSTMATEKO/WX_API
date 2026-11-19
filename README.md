@@ -4,7 +4,18 @@ Java 17 / Ant. T8_API의 설정 로더와 ctl → svc 구조를 참조했다. `c
 
 ## ADM 연계
 
-ADM은 database 프로필로 기동하고 payout.key에 API의 adm.key를 지정한다. REST는 로컬 IPv4 직접 연결과 고객사·키의 등록 CIDR을 검증한다. ADM의 merchant.environment 기본값은 live이며 test 지정 시 테스트 키만 승인한다. 문의·잔액 조회는 고객사 범위를 적용한다.
+ADM은 database 프로필로 기동하고 payout.key에 API의 adm.key를 지정한다. 업무 요청은 NGINX → TX24_HTTP → WX_API INet → WX_ADM 순서로 전달한다. [TX24_HTTP 라우트 예제](docs/tx24-http.routes.example.json)의 routes를 TX24_HTTP의 설정에 병합하고 NLB의 WX_API 풀을 WX_API INet 주소와 포트에 연결한다. WX_API의 host와 port가 수신 주소를 정하고 gateway.allowedIps가 TX24_HTTP의 실제 접속 IPv4 또는 CIDR을 지정한다. WX API의 네트워크 접근은 TX24_HTTP 호스트에서만 허용한다.
+
+NGINX의 WX 경로에서 전달 IP를 다시 설정한다. 아래 tx24_http는 배포 구성의 업스트림 이름으로 맞춘다.
+
+```nginx
+location ^~ /api/v1/wallet/ {
+    proxy_pass http://tx24_http;
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+WX_API는 TX24_HTTP가 전달한 주소 한 개를 사용한다. WX_ADM은 해당 키가 속한 고객사의 활성 MCHT_IP 행에서 주소 또는 CIDR을 대조한다. 고객사 공통 규칙과 해당 키 전용 규칙에 IPv4·IPv6를 사용할 수 있다. 주소 누락, 여러 주소가 이어진 헤더, 허용 범위 밖 주소에는 403을 반환한다. 별도 rest.port는 루프백 직접 확인용이며 TCP 피어의 주소를 사용한다. TX24_HTTP의 오류 응답은 해당 HTTP 상태와 메시지로 전달된다. ADM의 merchant.environment 기본값은 live이며 test 지정 시 테스트 키만 승인한다. 문의·잔액 조회는 고객사 범위를 적용한다.
 
 ## HYPHEN
 
