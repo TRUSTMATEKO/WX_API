@@ -32,6 +32,7 @@ fi
 JVM_OPTS=(
     "-Dfile.encoding=UTF-8"
     "-Djava.net.preferIPv4Stack=true"
+    "-Dio.lettuce.core.iouring=false"
     "-Xms256m"
     "-Xmx512m"
     "-Xlog:gc*,safepoint:file=${LOG_DIR}/gc.log:time,uptime,level,tags:filecount=5,filesize=20M"

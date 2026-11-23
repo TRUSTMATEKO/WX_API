@@ -64,8 +64,8 @@ public final class WalletConfig {
         if (UPSTREAM_ENV.isEmpty()) {
             logger.warn("실행 환경(env)이 test 도 prod 도 아니어서 송금 접수를 중지한다. 조회 업무만 제공한다.");
         } else if ("test".equals(UPSTREAM_ENV)) {
-            // 실수로 시험 설정으로 운영하는 일이 없도록 기동 로그에 크게 남긴다.
-            logger.warn("기관 전송 환경이 test 이다. HYPHEN 과 통신하지 않고 더미 응답으로 처리한다. "
+            // 설정대로 동작하는 상태이므로 기동 사실만 남긴다.
+            logger.info("기관 전송 환경이 test 이다. HYPHEN 과 통신하지 않고 더미 응답으로 처리한다. "
                     + "실제 송금은 일어나지 않으며 모계좌 잔액은 Redis 의 시험 잔액을 쓴다.");
         } else {
             logger.info("기관 전송 환경이 prod 이다. HYPHEN 으로 실제 전문을 보낸다.");

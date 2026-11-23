@@ -30,6 +30,7 @@ EXECUTOR_THRESHOLD_MILLIES="5000"
 JVM_OPTS=(
     "-Dfile.encoding=UTF-8"
     "-Djava.net.preferIPv4Stack=true"
+    "-Dio.lettuce.core.iouring=false"
     "-Xss1m"
     "-Xms512m"
     "-Xmx1g"
