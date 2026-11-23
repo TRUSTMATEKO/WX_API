@@ -13,7 +13,7 @@ import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.netty.NettyUtils;
 import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.svc.WalletFlowSvc;
-import kr.tx24.wx.inet.InternalInetUtils;
+import kr.tx24.wx.api.utils.INetUtils;
 import org.slf4j.MDC;
 
 /** TX24_HTTP가 변환한 Wallet 요청을 수신한다. 흐름만 나열하고 업무는 svc 계층이 처리한다. */
@@ -71,7 +71,7 @@ public final class MerchantApi {
     /** /api/v1/wallet: 지정된 경로를 사용하고 업무 결과를 HTTP 200 JSON으로 보낸다. */
     private INet submit(String action) {
 
-        if (!InternalInetUtils.isAllowed(NettyUtils.getRemoteAddress(channel), WalletConfig.gatewayAllowedIps())) {
+        if (!INetUtils.isAllowed(NettyUtils.getRemoteAddress(channel), WalletConfig.gatewayAllowedIps())) {
             return reject(403, "허용된 게이트웨이 경로가 필요합니다.");
         }
         INet.INMap data = request.data();
@@ -84,7 +84,7 @@ public final class MerchantApi {
         SharedMap<String, Object> result = flowSvc.wallet(action, data.getString("authorization"),
                 data.getString("x-forwarded-for").strip(), data.getString("contentType"),
                 new ByteArrayInputStream(payload), trace);
-        return InternalInetUtils.response(request, result);
+        return INetUtils.response(request, result);
     }
 
     /** /api/v1/wallet: 프록시 연결과 메서드 오류는 게이트웨이 HTTP 오류 형식을 사용한다. */

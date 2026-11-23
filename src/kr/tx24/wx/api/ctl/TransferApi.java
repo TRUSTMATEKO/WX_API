@@ -8,7 +8,7 @@ import kr.tx24.lib.inter.INet;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.svc.RecoverySvc;
 import kr.tx24.wx.api.WalletConfig;
-import kr.tx24.wx.inet.InternalInetUtils;
+import kr.tx24.wx.api.utils.INetUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,23 +41,23 @@ public final class TransferApi {
     public INet recovery() {
 
         if (!WalletConfig.internalReady()) {
-            return InternalInetUtils.response(request,
-                    InternalInetUtils.error("TX503", "송금 재조회 경로가 설정되지 않았습니다."));
+            return INetUtils.response(request,
+                    INetUtils.error("TX503", "송금 재조회 경로가 설정되지 않았습니다."));
         }
         try {
-            SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
+            SharedMap<String, Object> input = INetUtils.receive(channel, request,
                     WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
             SharedMap<String, Object> data = recoverySvc.recover(input.getInt("limit"), request.data().getString("x-trace-id"));
-            return InternalInetUtils.response(request, SharedMap.<String, Object>of()
+            return INetUtils.response(request, SharedMap.<String, Object>of()
                     .add("result", true)
                     .add("data", data));
         } catch (SecurityException refused) {
-            return InternalInetUtils.response(request,
-                    InternalInetUtils.error("TX401", "재조회 요청 경로와 키를 확인하세요."));
+            return INetUtils.response(request,
+                    INetUtils.error("TX401", "재조회 요청 경로와 키를 확인하세요."));
         } catch (Exception failure) {
             logger.warn("송금 재조회 처리 실패: type={}", failure.getClass().getSimpleName());
-            return InternalInetUtils.response(request,
-                    InternalInetUtils.error("TX503", "송금 재조회를 처리하지 못했습니다."));
+            return INetUtils.response(request,
+                    INetUtils.error("TX503", "송금 재조회를 처리하지 못했습니다."));
         }
     }
 }

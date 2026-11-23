@@ -1,5 +1,6 @@
 package kr.tx24.wx.api;
 
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -76,9 +77,25 @@ public final class WalletConfig {
 
     }
 
-    /** 설정을 읽는다. 설정이 없어도 던지지 않는다. */
+    /**
+     * 설정을 읽는다. 설정이 없어도 던지지 않는다.
+     *
+     * <p>{@code INetConfigLoader} 는 {@code inet.json} 이 없으면 {@code System.exit(1)} 로 프로세스를
+     * 내린다. 이 클래스는 {@code Router} 의 컨트롤러 적재 중에 처음 쓰이므로, 그 자리에서 내려가면
+     * 기동이 어디까지 갔는지 남지 않는다. 로더를 깨우기 전에 파일부터 본다. 경로는 로더가 쓰는
+     * 것과 같다. WX_ADM {@code WxApiRps}·WX_TASK {@code TransferNetErrTask} 와 같은 방식이다.</p>
+     *
+     * <p>수신 서버는 {@code host}·{@code port} 가 필요해 이 파일 없이는 기동하지 못한다. 그 거절은
+     * {@code INetServer} 가 기동 시점에 하고, 여기서는 업무 경로를 거절할 수 있도록 비워 둔다.
+     * 정적 초기화에서 던지면 {@code Router} 의 적재 루프가 삼켜 경로 하나가 조용히 빠진다.</p>
+     */
     private static SharedMap<String, Object> load() {
 
+        if (!Files.isRegularFile(SystemUtils.getINetConfigPath())) {
+            logger.error("conf/inet.json 이 없어 업무 경로를 모두 거절한다: {}",
+                    SystemUtils.getINetConfigPath().toAbsolutePath());
+            return SharedMap.<String, Object>of();
+        }
         try {
             SharedMap<String, Object> map = INetConfigLoader.getMap("property", TypeRegistry.MAP_SHAREDMAP_OBJECT);
             return map == null ? SharedMap.<String, Object>of() : map;

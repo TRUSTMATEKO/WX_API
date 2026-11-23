@@ -12,7 +12,7 @@ import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.svc.DepositSvc;
-import kr.tx24.wx.inet.InternalInetUtils;
+import kr.tx24.wx.api.utils.INetUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,23 +59,23 @@ public final class DepositApi {
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
         if (!WalletConfig.internalReady()) {
-            return InternalInetUtils.response(request,
-                    InternalInetUtils.error("TX503", "입금 통지 경로가 설정되지 않았습니다."));
+            return INetUtils.response(request,
+                    INetUtils.error("TX503", "입금 통지 경로가 설정되지 않았습니다."));
         }
         try {
-            SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
+            SharedMap<String, Object> input = INetUtils.receive(channel, request,
                     WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), FRAME);
             // 접속 주소는 통지가 말하는 값이 아니라 실제 접속 주소를 쓴다. 감사 이력에 이 값이 남는다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
-            return InternalInetUtils.response(request, depositSvc.receive(input, clientIp, trace));
+            return INetUtils.response(request, depositSvc.receive(input, clientIp, trace));
         } catch (SecurityException refused) {
             logger.warn("입금 통지의 경로 또는 키를 거절했다: trace={}", trace);
-            return InternalInetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
+            return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
         } catch (WalletException refused) {
-            return InternalInetUtils.response(request, WalletResult.of(refused, trace));
+            return INetUtils.response(request, WalletResult.of(refused, trace));
         } catch (Exception failure) {
             logger.warn("입금 통지 처리 실패: type={}, trace={}", failure.getClass().getSimpleName(), trace);
-            return InternalInetUtils.response(request, WalletResult.of(failure, trace));
+            return INetUtils.response(request, WalletResult.of(failure, trace));
         }
     }
 }

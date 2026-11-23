@@ -12,7 +12,7 @@ import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.svc.AdminLedgerSvc;
 import kr.tx24.wx.api.WalletConfig;
-import kr.tx24.wx.inet.InternalInetUtils;
+import kr.tx24.wx.api.utils.INetUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -97,12 +97,12 @@ public final class AdminLedgerApi {
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
         if (!WalletConfig.internalReady()) {
-            return InternalInetUtils.response(request,
-                    InternalInetUtils.error("TX503", "본사 원장 변경 경로가 설정되지 않았습니다."));
+            return INetUtils.response(request,
+                    INetUtils.error("TX503", "본사 원장 변경 경로가 설정되지 않았습니다."));
         }
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
-            SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
+            SharedMap<String, Object> input = INetUtils.receive(channel, request,
                     WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
@@ -114,14 +114,14 @@ public final class AdminLedgerApi {
                 case "webhook/retry"   -> adminLedgerSvc.webhookRetry(input, clientIp, trace);
                 default -> throw new WalletException("W001", "요청 경로를 확인해 주세요.");
             };
-            return InternalInetUtils.response(request, data);
+            return INetUtils.response(request, data);
         } catch (SecurityException refused) {
             logger.warn("본사 원장 변경 요청의 경로 또는 키를 거절했다: operation={}, trace={}", operation, trace);
-            return InternalInetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
+            return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
         } catch (WalletException refused) {
-            return InternalInetUtils.response(request, WalletResult.of(refused, trace));
+            return INetUtils.response(request, WalletResult.of(refused, trace));
         } catch (Exception failure) {
-            return InternalInetUtils.response(request, WalletResult.of(failure, trace));
+            return INetUtils.response(request, WalletResult.of(failure, trace));
         }
     }
 }

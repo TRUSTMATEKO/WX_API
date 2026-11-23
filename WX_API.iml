@@ -112,7 +112,7 @@
     <orderEntry type="module-library">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/lib/tx24_inet_2607.jar!/" />
+          <root url="jar://$MODULE_DIR$/lib/tx24_inet_2611.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />
@@ -121,16 +121,7 @@
     <orderEntry type="module-library">
       <library>
         <CLASSES>
-          <root url="jar://$MODULE_DIR$/lib/tx24_lib_2607.jar!/" />
-        </CLASSES>
-        <JAVADOC />
-        <SOURCES />
-      </library>
-    </orderEntry>
-    <orderEntry type="module-library">
-      <library>
-        <CLASSES>
-          <root url="jar://$MODULE_DIR$/lib/tx24_task_2607.jar!/" />
+          <root url="jar://$MODULE_DIR$/lib/tx24_lib_2611.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />

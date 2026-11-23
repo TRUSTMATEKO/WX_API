@@ -1,6 +1,6 @@
 # 프로젝트 개발 기준
 
-Java 17, Ant, TX24_LIB와 SharedMap을 사용한다. 원본 T8과 TX24_EXT는 읽기 전용이다. 런타임 설정은 보호된 conf/inet.json.property에 둔다. 연결 검증에는 --check 또는 WX_API의 ai/tools/verify-isolated.ps1을 사용한다. 실제 송금이나 운영 마감을 자동 검증에서 실행하지 않는다. 원장 쓰기는 이 프로젝트가 담당한다. 고객사 요청과 본사 화면 요청 모두 WX_API의 DB 트랜잭션에서 확정된다. 원장 코드는 src/kr/tx24/wx/ledger 에 있고 업무 계층은 WalletLedgerRps 만 호출한다. kr.tx24.wx 아래 ledger·inet 두 패키지는 WX_TASK·WX_ADM 과 글자 그대로 같은 사본이므로 한쪽만 고치지 않는다. 원장의 거절 코드와 예외는 그 패키지 안의 LedgerCode·LedgerEx 다. WX_ADM 의 ResultCode·AppEx 는 화면 전용이므로 가져오지 않는다. 고칠 때 다른 프로젝트의 같은 파일도 같이 바꾸고 diff 로 확인한다. 이 프로젝트만의 코드는 kr.tx24.wx.api 아래에 둔다. 본사 화면은 /api/internal/* 로 들어온다. WX_ADM을 호출하지 않는다.
+Java 17, Ant, TX24_LIB와 SharedMap을 사용한다. 원본 T8과 TX24_EXT는 읽기 전용이다. 런타임 설정은 보호된 conf/inet.json.property에 둔다. 연결 검증에는 --check 또는 WX_API의 ai/tools/verify-isolated.ps1을 사용한다. 실제 송금이나 운영 마감을 자동 검증에서 실행하지 않는다. 원장 쓰기는 이 프로젝트가 담당한다. 고객사 요청과 본사 화면 요청 모두 WX_API의 DB 트랜잭션에서 확정된다. 원장 코드는 src/kr/tx24/wx/ledger 에 있고 업무 계층은 WalletLedgerRps 만 호출한다. kr.tx24.wx 아래 ledger 패키지는 WX_TASK·WX_ADM 과 글자 그대로 같은 사본이므로 한쪽만 고치지 않는다. 내부 구간 INet 수신 계약은 받는 쪽이 WX_API 하나뿐이라 kr.tx24.wx.api.utils.INetUtils 에 둔다. 그 전문 모양을 고치면 WX_ADM·WX_TASK 의 송신부도 같이 고친다. 원장의 거절 코드와 예외는 그 패키지 안의 LedgerCode·LedgerEx 다. WX_ADM 의 ResultCode·AppEx 는 화면 전용이므로 가져오지 않는다. 고칠 때 다른 프로젝트의 같은 파일도 같이 바꾸고 diff 로 확인한다. 이 프로젝트만의 코드는 kr.tx24.wx.api 아래에 둔다. 본사 화면은 /api/internal/* 로 들어온다. WX_ADM을 호출하지 않는다.
 
 연동·검증 기준은 WX_ADM의 doc/wx-integration.md를 따른다.
 
