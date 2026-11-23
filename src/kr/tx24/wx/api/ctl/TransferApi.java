@@ -1,0 +1,80 @@
+package kr.tx24.wx.api.ctl;
+
+import io.netty.channel.ChannelHandlerContext;
+import kr.tx24.inet.mapper.Autowired;
+import kr.tx24.inet.mapper.Controller;
+import kr.tx24.inet.mapper.Route;
+import kr.tx24.lib.inter.INet;
+import kr.tx24.lib.map.SharedMap;
+import kr.tx24.wx.api.svc.RecoverySvc;
+import kr.tx24.wx.api.WalletConfig;
+import kr.tx24.wx.inet.InternalInetUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * WX_TASK가 요청하는 송금 통신장애 재조회를 받는다.
+ *
+ * <p>기관 연동은 WX_API에만 있고 원장은 WX_ADM에만 있다. 재조회는 두 경로를 모두 지나야 하므로
+ * 주기 실행은 WX_TASK가 맡고 실제 조회와 확정은 이 경로에서 수행한다.</p>
+ */
+@Controller(target = "/api/internal/transfer")
+public final class TransferApi {
+
+    private static final Logger logger = LoggerFactory.getLogger(TransferApi.class);
+
+    private static volatile SharedMap<String, Object> config;
+
+    private final ChannelHandlerContext channel;
+    private final INet request;
+    private final RecoverySvc recoverySvc;
+
+    /** /api/internal/transfer: 실제 채널과 원요청, 재조회 업무를 주입받는다. */
+    @Autowired
+    public TransferApi(ChannelHandlerContext channel, INet request, RecoverySvc recoverySvc) {
+
+        this.channel = channel;
+        this.request = request;
+        this.recoverySvc = recoverySvc;
+    }
+
+    /**
+     * 기동 시 내부 경로 키를 지정한다. 키가 없으면 경로를 열지 않는다.
+     *
+     * <p>내부 경로는 WX_ADM·WX_TASK·입금 통지 시스템이 모두 {@code internal_api.key} 하나를 쓴다.
+     * 경로만 나눠 두고 키와 허용 주소는 한 집합으로 관리한다.</p>
+     */
+    public static void configure(SharedMap<String, Object> property) {
+
+        if (property.getString("internal_api.key").length() < 32) {
+            logger.warn("내부 경로 키(internal_api.key)가 없어 송금 재조회 경로를 열지 않는다.");
+            return;
+        }
+        config = property.copy();
+    }
+
+    /** /api/internal/transfer/recovery: 장애 큐의 송금을 기관 원거래 결과로 확정한다. */
+    @Route(target = {"/recovery"}, loggable = false)
+    public INet recovery() {
+
+        if (config == null) {
+            return InternalInetUtils.response(request,
+                    InternalInetUtils.error("TX503", "송금 재조회 경로가 설정되지 않았습니다."));
+        }
+        try {
+            SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
+                    WalletConfig.internalAllowedIps(), "x-wx-key", config.getString("internal_api.key"), 8192);
+            SharedMap<String, Object> data = recoverySvc.recover(input.getInt("limit"), request.data().getString("x-trace-id"));
+            return InternalInetUtils.response(request, SharedMap.<String, Object>of()
+                    .add("result", true)
+                    .add("data", data));
+        } catch (SecurityException refused) {
+            return InternalInetUtils.response(request,
+                    InternalInetUtils.error("TX401", "재조회 요청 경로와 키를 확인하세요."));
+        } catch (Exception failure) {
+            logger.warn("송금 재조회 처리 실패: type={}", failure.getClass().getSimpleName());
+            return InternalInetUtils.response(request,
+                    InternalInetUtils.error("TX503", "송금 재조회를 처리하지 못했습니다."));
+        }
+    }
+}

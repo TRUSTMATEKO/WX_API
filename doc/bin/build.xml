@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project name="WX_API" basedir=".." default="build">
+
+    <!-- =========================================================
+         프로젝트 기본 설정
+         ========================================================= -->
+
+    <property name="project.title" value="WX API"/>
+    <property name="project.version" value="1.0.0"/>
+    <property name="java.release" value="17"/>
+    <property name="source.encoding" value="UTF-8"/>
+
+    <!-- =========================================================
+         프로젝트 디렉터리
+         ========================================================= -->
+
+    <property name="src.dir" location="${basedir}/src"/>
+    <property name="lib.dir" location="${basedir}/lib"/>
+    <property name="classes.dir" location="${basedir}/classes"/>
+    <property name="dist.dir" location="${basedir}/dist"/>
+
+    <!-- =========================================================
+         Fat JAR 설정
+
+         생성 파일:
+         dist/OPL_TASK.jar
+         ========================================================= -->
+
+    <property name="fat.jar.name" value="${ant.project.name}.jar"/>
+    <property name="fat.jar.file" location="${dist.dir}/${fat.jar.name}"/>
+
+    <!-- =========================================================
+         실행 클래스
+
+         실제 Java 소스의 package 선언과 일치해야 합니다.
+
+         예:
+         package kr.tx24.task.main;
+         ========================================================= -->
+
+    <property name="main.class" value="kr.tx24.task.main.TaskLauncher"/>
+
+    <!-- =========================================================
+         컴파일 Classpath
+         ========================================================= -->
+
+    <path id="project.classpath">
+        <fileset dir="${lib.dir}" erroronmissingdir="true">
+            <include name="**/*.jar"/>
+        </fileset>
+    </path>
+
+    <!-- =========================================================
+         초기화
+
+         1. 소스 및 라이브러리 디렉터리 확인
+         2. 빌드 시간 생성
+         3. classes 및 dist 디렉터리 생성
+         ========================================================= -->
+
+    <target name="init">
+
+        <available file="${src.dir}" type="dir" property="src.dir.exists"/>
+        <available file="${lib.dir}" type="dir" property="lib.dir.exists"/>
+
+        <fail unless="src.dir.exists" message="소스 디렉터리가 없습니다: ${src.dir}"/>
+        <fail unless="lib.dir.exists" message="라이브러리 디렉터리가 없습니다: ${lib.dir}"/>
+
+        <tstamp>
+            <format property="build.time" pattern="yyyy-MM-dd'T'HH:mm:ssZ"/>
+            <format property="backup.time" pattern="yyyyMMddHHmmss"/>
+        </tstamp>
+
+        <mkdir dir="${classes.dir}"/>
+        <mkdir dir="${dist.dir}"/>
+
+        <echo message="========================================"/>
+        <echo message="프로젝트 : ${project.title}"/>
+        <echo message="버전     : ${project.version}"/>
+        <echo message="Java     : ${java.release}"/>
+        <echo message="빌드시간 : ${build.time}"/>
+        <echo message="========================================"/>
+
+    </target>
+
+    <!-- =========================================================
+         기존 Fat JAR 존재 여부 확인
+         ========================================================= -->
+
+    <target name="check-existing-jar" depends="init">
+
+        <available file="${fat.jar.file}" property="fat.jar.exists"/>
+
+    </target>
+
+    <!-- =========================================================
+         기존 Fat JAR 백업
+
+         예:
+         OPL_TASK.jar
+         → OPL_TASK.jar.20260723102530
+
+         기존 JAR가 존재할 때만 실행됩니다.
+         ========================================================= -->
+
+    <target name="backup-jar" depends="check-existing-jar" if="fat.jar.exists">
+
+        <move file="${fat.jar.file}"
+              tofile="${fat.jar.file}.${backup.time}"
+              overwrite="false"
+              failonerror="true"/>
+
+        <echo message="기존 Fat JAR 백업 완료"/>
+        <echo message="${fat.jar.file}.${backup.time}"/>
+
+    </target>
+
+    <!-- =========================================================
+         이전 컴파일 결과 삭제
+
+         dist 디렉터리는 삭제하지 않습니다.
+         기존 백업 JAR를 보존하기 위함입니다.
+         ========================================================= -->
+
+    <target name="clean-classes" depends="backup-jar">
+
+        <delete dir="${classes.dir}" failonerror="false"/>
+        <mkdir dir="${classes.dir}"/>
+
+        <echo message="이전 컴파일 결과 삭제 완료"/>
+
+    </target>
+
+    <!-- =========================================================
+         전체 Java 소스 컴파일
+         ========================================================= -->
+
+    <target name="compile" depends="clean-classes">
+
+        <javac srcdir="${src.dir}"
+               destdir="${classes.dir}"
+               release="${java.release}"
+               encoding="${source.encoding}"
+               debug="true"
+               debuglevel="lines,vars,source"
+               deprecation="true"
+               includeantruntime="false">
+
+            <classpath refid="project.classpath"/>
+            <compilerarg value="-parameters"/>
+
+        </javac>
+
+        <!-- Java 파일 이외의 설정 파일 및 리소스 복사 -->
+        <copy todir="${classes.dir}" overwrite="true">
+            <fileset dir="${src.dir}">
+                <exclude name="**/*.java"/>
+            </fileset>
+        </copy>
+
+        <echo message="전체 Java 소스 컴파일 완료"/>
+
+    </target>
+
+    <!-- =========================================================
+         단일 Fat JAR 생성
+
+         포함 대상:
+         1. 전체 컴파일 클래스
+         2. 전체 리소스 파일
+         3. lib 디렉터리의 모든 외부 라이브러리
+         ========================================================= -->
+
+    <target name="fat-jar" depends="compile">
+
+        <jar destfile="${fat.jar.file}"
+             duplicate="preserve"
+             filesetmanifest="skip">
+
+            <!-- 전체 클래스 및 리소스 포함 -->
+            <fileset dir="${classes.dir}">
+                <include name="**/*"/>
+            </fileset>
+
+            <!-- 외부 라이브러리 병합 -->
+            <zipgroupfileset dir="${lib.dir}">
+                <include name="**/*.jar"/>
+            </zipgroupfileset>
+
+            <manifest>
+                <attribute name="Manifest-Version" value="1.0"/>
+                <attribute name="Main-Class" value="${main.class}"/>
+                <attribute name="Implementation-Title" value="${project.title}"/>
+                <attribute name="Implementation-Version" value="${project.version}"/>
+                <attribute name="Build-Jdk-Spec" value="${java.release}"/>
+                <attribute name="Build-Time" value="${build.time}"/>
+            </manifest>
+
+        </jar>
+
+        <echo message="========================================"/>
+        <echo message="Fat JAR 생성 완료"/>
+        <echo message="생성 파일 : ${fat.jar.file}"/>
+        <echo message="========================================"/>
+
+    </target>
+
+    <!-- =========================================================
+         기본 빌드
+
+         실행:
+         ant
+         또는
+         ant build
+
+         실행 순서:
+         init
+         → 기존 JAR 확인
+         → 기존 JAR 백업
+         → classes 삭제
+         → 전체 소스 컴파일
+         → 단일 Fat JAR 생성
+         ========================================================= -->
+
+    <target name="build" depends="fat-jar">
+
+        <echo message="전체 빌드가 완료되었습니다."/>
+
+    </target>
+
+    <!-- =========================================================
+         컴파일 결과만 삭제
+
+         실행:
+         ant clean
+
+         dist 및 백업 JAR는 삭제하지 않습니다.
+         ========================================================= -->
+
+    <target name="clean">
+
+        <delete dir="${classes.dir}" failonerror="false"/>
+
+        <echo message="classes 디렉터리를 삭제했습니다."/>
+
+    </target>
+
+    <!-- =========================================================
+         전체 삭제
+
+         실행:
+         ant clean-all
+
+         주의:
+         신규 JAR와 백업 JAR를 포함한 dist 전체가 삭제됩니다.
+         ========================================================= -->
+
+    <target name="clean-all">
+
+        <delete dir="${classes.dir}" failonerror="false"/>
+        <delete dir="${dist.dir}" failonerror="false"/>
+
+        <echo message="classes와 dist 디렉터리를 모두 삭제했습니다."/>
+
+    </target>
+
+</project>

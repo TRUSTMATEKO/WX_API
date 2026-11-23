@@ -1,35 +1,29 @@
 # WX_API
 
-Java 17 / Ant. T8_API의 설정 로더와 ctl → svc 구조를 참조했다. `conf/inet.example.json`을 `conf/inet.json`으로 복사하고 enabled, rest.port, adm.port, adm.key를 설정한 뒤 `ant run`으로 시작한다. 기본 프로필은 database다.
+Java 17, Ant, TX24_LIB 및 INet을 사용한다. `ant compile`은 INet 게이트웨이와 루프백 REST를 빌드한다.
 
-## ADM 연계
+## 연결 설정
 
-ADM은 database 프로필로 기동하고 payout.key에 API의 adm.key를 지정한다. 업무 요청은 NGINX → TX24_HTTP → WX_API INet → WX_ADM 순서로 전달한다. [TX24_HTTP 라우트 예제](docs/tx24-http.routes.example.json)의 routes를 TX24_HTTP의 설정에 병합하고 NLB의 WX_API 풀을 WX_API INet 주소와 포트에 연결한다. WX_API의 host와 port가 수신 주소를 정하고 gateway.allowedIps가 TX24_HTTP의 실제 접속 IPv4 또는 CIDR을 지정한다. WX API의 네트워크 접근은 TX24_HTTP 호스트에서만 허용한다.
+- `conf/inet.json`의 내부 경로는 `internal.allowedIps`와 `internal_api.key`로 받는다. WX_ADM·WX_TASK·입금 통지 시스템이 같은 키를 쓴다. 두 호출자는 이 `port`를 각자 `conf/nlb.json`의 `WX_API` 그룹에 둔다. Redis 주소는 실행 스크립트가 `-DREDIS`로 준다.
+- `host`, `port`, `gateway.allowedIps`는 TX24_HTTP 게이트웨이의 실제 연결 범위에 맞춘다. `env`는 `test` 또는 `prod`다. 둘 중 하나가 아니면 송금을 접수하지 않고 조회만 제공한다.
+- NGINX에서는 `proxy_set_header X-Forwarded-For $remote_addr;`로 값을 덮어쓰고 TX24_HTTP가 INet에 전달한다. TX24_HTTP 라우트가 authorization 헤더를 전달해야 한다. 이어진 IP 문자열은 거절한다. WX DB의 인증 키에 저장된 `MCHT_WALLET_API_KEY.ips`의 IPv4·IPv6 CIDR 규칙과 대조한다.
+- 컴파일 후 PowerShell에서 `java -cp 'out/classes;lib/*' kr.tx24.wx.api.main.Launcher --check`로 전용 키·포트·원장 스키마·업무 트리거를 확인한다. 운영 시작은 `ant run`을 사용한다.
+- `ai/tools/verify-isolated.ps1`은 일회성 포트·키의 내부 연결과 루프백 REST 상태를 검증한다. 루프백 REST(`rest.port`·`rest.key`)는 이 검증에서만 쓰는 진단 수신부여서 `conf/inet.json`에 두지 않는다. 운영 수신부는 TX24_HTTP가 보내는 INet 경로 하나다. 잔액·기존 거래 조회는 WX 범위로 동작한다.
 
-NGINX의 WX 경로에서 전달 IP를 다시 설정한다. 아래 tx24_http는 배포 구성의 업스트림 이름으로 맞춘다.
+## 공개 Wallet 계약
 
-```nginx
-location ^~ /api/v1/wallet/ {
-    proxy_pass http://tx24_http;
-    proxy_set_header X-Forwarded-For $remote_addr;
-}
-```
+- TX24_DOC 기준으로 Authorization 헤더에 wk_ 키를 넣는다. 키 소속과 등록 IP를 확인한 후 지정된 Wallet에서 처리한다.
+- balance는 빈 JSON 객체를 받는다. inquiry는 trackId와 서울 기준 완료일 또는 접수일 trxDay를 받는다.
+- 공개 요청 본문의 walletId는 처리 범위에 사용하지 않는다. 인증이 완료된 업무 응답에는 연결 Wallet ID를 포함한다.
+- 본사 고객사 조회의 Wallet API 연결 화면에서 기존 키를 해당 고객사의 API 사용 Wallet에 연결한다. 배포에는 WX_ADM의 ai/db/WX_SCHEMA.sql과 호환되는 업무 스키마가 필요하다.
+- 송금은 Authorization 키와 등록 IP 확인 후, 연결 Wallet ID와 지급 관련 입력 전체로 계산한 HMAC-SHA256 `checksum`을 검증한다. 필드 순서와 예제는 Wallet API HTML의 송금 절에 있다.
+- 업무 JSON은 `resultCd`, `resultMsg`(간략), `advanceMsg`(상세), `createAt`을 항상 제공한다. 송금과 원거래 조회는 원거래 `requestedAt`과 `createAt`, 마스킹 `accntNo` 및 같은 거래 필드를 사용한다.
 
-WX_API는 TX24_HTTP가 전달한 주소 한 개를 사용한다. WX_ADM은 해당 키가 속한 고객사의 활성 MCHT_IP 행에서 주소 또는 CIDR을 대조한다. 고객사 공통 규칙과 해당 키 전용 규칙에 IPv4·IPv6를 사용할 수 있다. 주소 누락, 여러 주소가 이어진 헤더, 허용 범위 밖 주소에는 403을 반환한다. 별도 rest.port는 루프백 직접 확인용이며 TCP 피어의 주소를 사용한다. TX24_HTTP의 오류 응답은 해당 HTTP 상태와 메시지로 전달된다. ADM의 merchant.environment 기본값은 live이며 test 지정 시 테스트 키만 승인한다. 문의·잔액 조회는 고객사 범위를 적용한다.
+## HYPHEN 가동 조건
 
-## HYPHEN
+TX24_EXT의 `hyphen` 원본 패키지를 사용한다. 기관 시험 환경·응답코드표와 원거래 재조회 계약이 확정될 때까지 운영 송금·예금주 조회에는 HTTP 200과 업무 코드 W003을 반환한다. 기관 연결을 열기 전 송신 전에 전문번호와 예약을 저장하고, 결과 불명은 원거래 재조회로 확정하며, 최종 원장 반영의 중복을 차단해야 한다.
 
-`TX24_EXT/src/kr/tx24/ext/hyphen`의 Java 16개를 원본 바이트 그대로 복사했다. 컴파일 의존성인 `ExtCode.java`도 별도 편입했다. `HyphenSvc`는 원본 INet 계약과 보호 프로필로 `HyphenPisp.transfer`·`balance` 및 원거래 번호를 받는 `inquery`를 감싼다. 시연 라우트는 가상 송금만 수행한다.
+- [Wallet API HTML](docs/index.html)
+- [운영 조회 OpenAPI](docs/wallet-database.openapi.json)
+- [TX24_HTTP 경로 예제](docs/tx24-http.routes.example.json)
 
-기관 송금 가동 전에는 보호된 기관 프로필·응답코드 자료·별도 Redis 계약, 접수 및 원장 예약, 원거래 일자·전문번호의 송신 전 영속화, 기관 결과 재조회와 운영 코드 매핑이 필요하다. 원본은 전역 Redis 순번과 비원자적 상한 리셋을 포함한다. 운영 동시성 및 중복 처리 검증이 필요하다. 실제 기관 접속과 송금은 검증 범위에서 제외한다.
-
-다른 두 프로젝트가 같은 상위 폴더에 있을 때 PowerShell 7로 ./tools/verify-integrated.ps1을 실행하면 세 프로젝트를 임시 설정·포트로 검증한다.
-
-## Wallet REST 규격
-
-- [Wallet API HTML 문서](docs/index.html)
-- [OpenAPI 3.1 JSON](docs/wallet-rest.openapi.json)
-
-TX24_LIB의 설정 디렉터리는 JVM -DCONF로 지정할 수 있다. 잔액 및 송금 장부 조회 계약은 docs/wallet-database.openapi.json이다. HYPHEN 시험 프로필과 응답코드 수령 전 송금·예금주 조회는 인증 후 503으로 끝난다.
-
-가상 원장의 회귀 검증은 명시적으로 profile=demo를 지정하고 rest.port 및 REST 전용 rest.key를 사용한다. POST /api/v1/wallet/transfer와 /api/v1/wallet/holder가 같은 고객사 원장으로 연결된다. 신규 송금은 HUB_ADM과 동일하게 IDUtils.getUnique("T")로 체번한다. 샘플 통합 실행은 ../WX_ADM/tools/demo-stack.ps1, 세 프로젝트의 검증 인계는 ../WX_ADM/doc/claude-review.md를 사용한다.

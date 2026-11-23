@@ -1,8 +1,11 @@
 <component name="ProjectRunConfigurationManager">
-    <configuration default="false" name="WX_API" type="Application" factoryName="Application">
-        <option name="MAIN_CLASS_NAME" value="kr.tx24.wx.api.main.Launcher"/>
-        <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$"/>
-        <module name="WX_API"/>
-        <method v="2"><option name="Make" enabled="true"/></method>
-    </configuration>
+  <configuration default="false" name="WX_API" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="kr.tx24.wx.api.main.Launcher" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <module name="WX_API" />
+    <option name="VM_PARAMETERS" value="-Dfile.encoding=UTF-8 -DREDIS=112.175.48.155:6379/0" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
 </component>

@@ -1,0 +1,588 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "WX Wallet API",
+    "version": "0.7.0",
+    "description": "TX24_DOC Wallet 요청·응답 계약. Authorization 키로 고객사, 허용 IP, 연결 Wallet을 확인합니다."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "WX 운영 게이트웨이"
+    },
+    {
+      "url": "http://127.0.0.1:{port}",
+      "description": "로컬 진단",
+      "variables": {
+        "port": {
+          "default": "18099"
+        }
+      }
+    }
+  ],
+  "paths": {
+    "/api/v1/wallet/holder": {
+      "post": {
+        "tags": [
+          "Wallet API"
+        ],
+        "summary": "예금주 조회",
+        "description": "예금주 조회 요청의 필수 필드와 형식을 검증합니다. HYPHEN 가동 전에는 접수 중지 W003을 반환합니다.",
+        "operationId": "walletHolder",
+        "security": [
+          {
+            "WalletKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "trackId",
+                  "bankCd",
+                  "accntNo"
+                ],
+                "properties": {
+                  "trackId": {
+                    "type": "string",
+                    "description": "가맹점 고객 요청번호",
+                    "maxLength": 64
+                  },
+                  "bankCd": {
+                    "type": "string",
+                    "description": "은행코드, 앞자리 0 유지",
+                    "pattern": "^[0-9]{3}$"
+                  },
+                  "accntNo": {
+                    "type": "string",
+                    "description": "계좌번호, 앞자리 0 유지, 하이픈 없이 숫자만",
+                    "pattern": "^[0-9]{1,32}$"
+                  }
+                }
+              },
+              "example": {
+                "trackId": "H001",
+                "bankCd": "004",
+                "accntNo": "1234567890"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON 업무 결과. 성공 여부는 resultCd로 판정합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletResult"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "POST만 허용",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/transfer": {
+      "post": {
+        "tags": [
+          "Wallet API"
+        ],
+        "summary": "송금",
+        "operationId": "walletTransfer",
+        "description": "등록 IP 확인 후 연결된 walletId와 송금 전문의 checksum을 검증합니다. checksum 누락, 형식 오류, 불일치는 W001입니다. HYPHEN 가동 전에는 접수 중지 W003을 반환합니다.",
+        "security": [
+          {
+            "WalletKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "trackId",
+                  "bankCd",
+                  "accntNo",
+                  "amount",
+                  "checksum"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "trackId": {
+                    "type": "string",
+                    "description": "가맹점 고객 요청번호",
+                    "maxLength": 64
+                  },
+                  "bankCd": {
+                    "type": "string",
+                    "description": "은행코드, 앞자리 0 유지",
+                    "pattern": "^[0-9]{3}$"
+                  },
+                  "accntNo": {
+                    "type": "string",
+                    "description": "계좌번호, 앞자리 0 유지, 하이픈 없이 숫자만",
+                    "pattern": "^[0-9]{1,32}$"
+                  },
+                  "amount": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "최대 18자리 양의 원화 정수",
+                    "exclusiveMaximum": 1000000000000000000
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "description": "Authorization 원문(wk_ 포함)을 키로 UTF-8 HMAC-SHA256 후 소문자 16진수로 반환합니다. WX-WALLET-TRANSFER-V1, 인증 키에 연결된 walletId, trackId, bankCd, accntNo, amount(십진수 정수), sender, holder, note를 순서대로 LF로 연결합니다. 생략한 선택값은 빈 문자열이며 마지막 값 뒤에 LF를 추가하지 않습니다. 계좌번호의 앞자리 0과 선택값의 공백을 유지합니다. 문자열 안의 제어 문자는 금지합니다. 예제 키는 wk_example_for_documentation_only이고 연결 walletId는 SAMPLE-WALLET입니다.",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "writeOnly": true,
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "sender": {
+                    "type": "string",
+                    "description": "보내는 사람. 비필수 항목으로 미전송 시 미리 등록된 송금자명으로 처리됩니다."
+                  },
+                  "holder": {
+                    "type": "string",
+                    "description": "예금주명. 생략 시 예금주 조회 결과를 사용합니다."
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "거래 메모. 120자 초과분은 잘립니다."
+                  }
+                }
+              },
+              "example": {
+                "trackId": "T001",
+                "bankCd": "004",
+                "accntNo": "0000000000",
+                "amount": 1000,
+                "sender": "상점명",
+                "checksum": "77f4f0989e9b7f9d9c1e6bbc132af0a1870117085522756cd54f3e53bc95b7be"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON 업무 결과. 성공 여부는 resultCd로 판정합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletResult"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "POST만 허용",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/balance": {
+      "post": {
+        "tags": [
+          "Wallet API"
+        ],
+        "summary": "잔액 조회",
+        "description": "키에 연결된 Wallet의 장부잔액(balance)과 이체가능잔액(availableBalance)을 반환합니다. 요청 본문은 빈 JSON 객체입니다.",
+        "operationId": "walletBalance",
+        "security": [
+          {
+            "WalletKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON 업무 결과. 성공 여부는 resultCd로 판정합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletResult"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "POST만 허용",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/inquiry": {
+      "post": {
+        "tags": [
+          "Wallet API"
+        ],
+        "summary": "거래 조회",
+        "description": "고객사가 보낸 trackId와 서울 기준 완료일 또는 접수일 trxDay로 조회합니다. 인증 키에 연결된 Wallet의 거래만 조회하며 원거래 결과는 rootResultCd로 구분합니다. 빈 값은 처리 중이고 W00X는 결과 확인 중입니다.",
+        "operationId": "walletInquiry",
+        "security": [
+          {
+            "WalletKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "trackId",
+                  "trxDay"
+                ],
+                "properties": {
+                  "trackId": {
+                    "type": "string",
+                    "description": "가맹점 고객 요청번호",
+                    "maxLength": 64
+                  },
+                  "trxDay": {
+                    "type": "string",
+                    "description": "송금 완료일 또는 접수일(한국시간) yyyyMMdd",
+                    "pattern": "^[0-9]{8}$"
+                  }
+                }
+              },
+              "example": {
+                "trackId": "T001",
+                "trxDay": "20261008"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON 업무 결과. 성공 여부는 resultCd로 판정합니다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletResult"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "POST만 허용",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "WalletKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "wk_ 접두사의 월렛 전용 키. Authorization: wk_..."
+      }
+    },
+    "schemas": {
+      "WalletResult": {
+        "type": "object",
+        "required": [
+          "resultCd",
+          "resultMsg",
+          "advanceMsg",
+          "createAt",
+          "traceId"
+        ],
+        "properties": {
+          "resultCd": {
+            "type": "string",
+            "description": "0000 정상, W001 요청값·checksum 오류, W002 인증·접속 IP 오류, W003 접수 중지, W004 Wallet 설정 오류, W009 거래 없음, W999 원장 연결 또는 내부 오류."
+          },
+          "resultMsg": {
+            "type": "string",
+            "description": "결과 코드에 해당하는 간략한 메시지"
+          },
+          "advanceMsg": {
+            "type": "string",
+            "description": "업무 처리 결과 또는 실패 이유에 대한 상세 메시지"
+          },
+          "createAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9]{14}$",
+            "description": "서울 기준 yyyyMMddHHmmss. 원거래가 있으면 성공 건의 유효한 TRX_WALLET.acqTrxDate 우선, 그 외에는 TRX_TRANSFER.regDate를 사용합니다. 원거래가 미확정이면 null이고, 원거래를 반환하지 않는 응답은 응답 생성 시각입니다."
+          },
+          "requestedAt": {
+            "type": "string",
+            "pattern": "^[0-9]{14}$",
+            "description": "서울 기준 원거래 접수 시각. TRX_TRANSFER.reqDate."
+          },
+          "trxId": {
+            "type": "string",
+            "description": "WX 송금 거래번호"
+          },
+          "trackId": {
+            "type": "string",
+            "description": "고객사 요청번호"
+          },
+          "status": {
+            "type": "string",
+            "description": "원거래 상태"
+          },
+          "bankCd": {
+            "type": "string",
+            "description": "수취은행 코드"
+          },
+          "accntNo": {
+            "type": "string",
+            "description": "마스킹한 수취 계좌번호"
+          },
+          "sender": {
+            "type": "string",
+            "description": "원거래에 적용한 송금자명"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "송금 원금(원)"
+          },
+          "holder": {
+            "type": "string",
+            "description": "기관 예금주 조회 결과 또는 원거래 예금주명"
+          },
+          "balance": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Wallet 장부잔액(원). 잔액 조회는 현재값, 송금·결과 조회는 원거래 직후 값이며 미기록 시 null입니다."
+          },
+          "availableBalance": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "이체가능잔액(원). 잔액 조회는 현재 장부잔액에서 예약액과 보류액을 뺍니다. 송금·결과 조회는 원거래 직후 값이며 미기록 시 null입니다."
+          },
+          "acqTrxId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "기관 거래번호"
+          },
+          "rootResultCd": {
+            "type": "string",
+            "description": "조회된 원거래 결과코드"
+          },
+          "rootResultMsg": {
+            "type": "string",
+            "description": "조회된 원거래 결과 메시지"
+          },
+          "walletId": {
+            "type": "string",
+            "description": "인증을 통과한 API 키에 연결된 Wallet ID. 인증·Wallet 설정 오류에서는 제공하지 않습니다."
+          },
+          "traceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{8}$",
+            "description": "요청 추적 번호"
+          }
+        }
+      },
+      "WebhookEvent": {
+        "type": "object",
+        "description": "웹훅 본문. hook 필드를 URL 디코딩한 JSON 이다.",
+        "required": [
+          "eventType",
+          "trxId",
+          "status",
+          "confirmedAt",
+          "walletId",
+          "amount"
+        ],
+        "properties": {
+          "eventType": {
+            "type": "string",
+            "enum": [
+              "transfer.settled",
+              "deposit.credited"
+            ]
+          },
+          "trxId": {
+            "type": "string",
+            "description": "송금 거래번호 또는 입금번호. 중복 판정의 기준."
+          },
+          "status": {
+            "type": "string",
+            "description": "송금은 성공·실패, 입금은 완료."
+          },
+          "confirmedAt": {
+            "type": "string",
+            "description": "확정 시각 yyyyMMddHHmmss, 서울."
+          },
+          "walletId": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "원화 정수."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "송금에만 있다. 고객사 요청번호."
+          },
+          "acqTrxId": {
+            "type": "string",
+            "description": "송금에만 있다. 기관 거래번호."
+          },
+          "depositName": {
+            "type": "string",
+            "description": "입금에만 있다. 입금자명."
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "va",
+              "sms"
+            ],
+            "description": "입금에만 있다. 수신 경로."
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "transfer.settled": {
+      "post": {
+        "description": "고객사 수신처로 보내는 통지. POST 본문은 form 한 필드(hook)에 JSON 을 URL 인코딩해 담는다. HTTP 2xx 이면서 응답 본문에 0000 이 있어야 수신 성공으로 본다. 실패는 1분 간격 최대 20회 재시도한다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "hook"
+                ],
+                "properties": {
+                  "hook": {
+                    "type": "string",
+                    "description": "URL 인코딩한 통지 JSON. 디코딩하면 WebhookEvent 다.",
+                    "externalDocs": {
+                      "description": "디코딩 결과",
+                      "url": "#/components/schemas/WebhookEvent"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "수신 성공. 본문에 0000 을 포함해야 한다.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "0000"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "deposit.credited": {
+      "post": {
+        "description": "고객사 수신처로 보내는 통지. POST 본문은 form 한 필드(hook)에 JSON 을 URL 인코딩해 담는다. HTTP 2xx 이면서 응답 본문에 0000 이 있어야 수신 성공으로 본다. 실패는 1분 간격 최대 20회 재시도한다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "hook"
+                ],
+                "properties": {
+                  "hook": {
+                    "type": "string",
+                    "description": "URL 인코딩한 통지 JSON. 디코딩하면 WebhookEvent 다.",
+                    "externalDocs": {
+                      "description": "디코딩 결과",
+                      "url": "#/components/schemas/WebhookEvent"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "수신 성공. 본문에 0000 을 포함해야 한다.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "examples": [
+                    "0000"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

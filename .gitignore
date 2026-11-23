@@ -8,3 +8,5 @@
 *.pem
 *.key
 .env*
+/ai/
+/conf/
