@@ -8,7 +8,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 입력된 프로세스명이 없으면 배포 루트 디렉터리명을 사용한다.
 PROC_NAME="${PROC_NAME:-$(basename "$BASE_DIR")}"
-MAIN_CLASS="kr.tx24.inet.server.INetServer2"
+MAIN_CLASS="kr.tx24.inet.server.INetServer"
 BASE_PACKAGE="kr.tx24.wx.api.ctl"
 
 # 애플리케이션 경로 설정

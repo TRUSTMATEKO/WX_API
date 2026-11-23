@@ -11,6 +11,7 @@ import kr.tx24.inet.mapper.Route;
 import kr.tx24.lib.inter.INet;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.netty.NettyUtils;
+import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.svc.WalletFlowSvc;
 import kr.tx24.wx.inet.InternalInetUtils;
 import org.slf4j.MDC;
@@ -19,7 +20,12 @@ import org.slf4j.MDC;
 @Controller(target = "/api/v1/wallet")
 public final class MerchantApi {
 
-    private static volatile String allowedPeers;
+    static {
+        // Router 가 @Controller 를 적재할 때 Class.forName 으로 이 클래스를 초기화한다. 그 자리에서
+        // 실행 설정을 확정해 기동 로그에 남기고, 전문 본문 로깅(deepview·기관 원본 로거)을 미리 끈다.
+        // 이 한 줄이 없으면 설정이 첫 요청 때 읽히고 그 전까지 차단이 걸리지 않는다.
+        WalletConfig.enabled();
+    }
 
     private final ChannelHandlerContext channel;
     private final INet request;
@@ -32,12 +38,6 @@ public final class MerchantApi {
         this.channel = channel;
         this.request = request;
         this.flowSvc = flowSvc;
-    }
-
-    /** /api/v1/wallet 기동: TX24_HTTP의 허용 소켓 주소를 지정한다. */
-    public static void configure(String peers) {
-
-        allowedPeers = peers;
     }
 
     /** /api/v1/wallet/balance: 인증 키에 연결된 Wallet 잔액을 조회한다. */
@@ -71,7 +71,7 @@ public final class MerchantApi {
     /** /api/v1/wallet: 지정된 경로를 사용하고 업무 결과를 HTTP 200 JSON으로 보낸다. */
     private INet submit(String action) {
 
-        if (!InternalInetUtils.isAllowed(NettyUtils.getRemoteAddress(channel), allowedPeers)) {
+        if (!InternalInetUtils.isAllowed(NettyUtils.getRemoteAddress(channel), WalletConfig.gatewayAllowedIps())) {
             return reject(403, "허용된 게이트웨이 경로가 필요합니다.");
         }
         INet.INMap data = request.data();

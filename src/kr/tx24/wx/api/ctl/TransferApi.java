@@ -23,8 +23,6 @@ public final class TransferApi {
 
     private static final Logger logger = LoggerFactory.getLogger(TransferApi.class);
 
-    private static volatile SharedMap<String, Object> config;
-
     private final ChannelHandlerContext channel;
     private final INet request;
     private final RecoverySvc recoverySvc;
@@ -38,32 +36,17 @@ public final class TransferApi {
         this.recoverySvc = recoverySvc;
     }
 
-    /**
-     * 기동 시 내부 경로 키를 지정한다. 키가 없으면 경로를 열지 않는다.
-     *
-     * <p>내부 경로는 WX_ADM·WX_TASK·입금 통지 시스템이 모두 {@code internal_api.key} 하나를 쓴다.
-     * 경로만 나눠 두고 키와 허용 주소는 한 집합으로 관리한다.</p>
-     */
-    public static void configure(SharedMap<String, Object> property) {
-
-        if (property.getString("internal_api.key").length() < 32) {
-            logger.warn("내부 경로 키(internal_api.key)가 없어 송금 재조회 경로를 열지 않는다.");
-            return;
-        }
-        config = property.copy();
-    }
-
     /** /api/internal/transfer/recovery: 장애 큐의 송금을 기관 원거래 결과로 확정한다. */
     @Route(target = {"/recovery"}, loggable = false)
     public INet recovery() {
 
-        if (config == null) {
+        if (!WalletConfig.internalReady()) {
             return InternalInetUtils.response(request,
                     InternalInetUtils.error("TX503", "송금 재조회 경로가 설정되지 않았습니다."));
         }
         try {
             SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", config.getString("internal_api.key"), 8192);
+                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
             SharedMap<String, Object> data = recoverySvc.recover(input.getInt("limit"), request.data().getString("x-trace-id"));
             return InternalInetUtils.response(request, SharedMap.<String, Object>of()
                     .add("result", true)

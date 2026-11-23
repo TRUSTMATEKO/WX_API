@@ -17,8 +17,8 @@ import java.io.InputStream;
 /**
  * Wallet 네 업무의 공통 절차를 한곳에서 순서대로 수행한다.
  *
- * <p>진입 경로가 둘이다. 게이트웨이 INet({@code MerchantApi})과 루프백 REST({@code WalletRestApi}).
- * 두 경로가 같은 절차를 지나야 하므로 흐름을 각 컨트롤러에 복사하지 않고 여기 한 번만 둔다.</p>
+ * <p>진입 경로는 게이트웨이 INet({@code MerchantApi}) 하나다. 흐름을 컨트롤러에 두지 않고
+ * 여기 한 번만 두어 시험 도구도 같은 절차를 지나게 한다.</p>
  *
  * <p>절차와 그 이유</p>
  * <ol>
@@ -60,8 +60,8 @@ public final class WalletFlowSvc {
     /**
      * 라우터 밖에서 쓰는 조립 지점이다.
      *
-     * <p>{@code WalletRestApi}는 {@code @Controller}가 아니어서 생성자 주입을 받지 못한다.
-     * 두 진입 경로가 같은 계층 구성을 쓰도록 조립을 이 한 곳에 둔다.</p>
+     * <p>{@code ai/tools} 의 시험 도구는 {@code @Controller}가 아니어서 생성자 주입을 받지
+     * 못한다. 운영 경로와 같은 계층 구성을 쓰도록 조립을 이 한 곳에 둔다.</p>
      */
     public static WalletFlowSvc create() {
 

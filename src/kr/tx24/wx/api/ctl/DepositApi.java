@@ -38,8 +38,6 @@ public final class DepositApi {
     /** 통지 전문 상한. 원문을 함께 받을 수 있어 다른 내부 경로보다 넉넉하게 둔다. */
     private static final int FRAME = 16384;
 
-    private static volatile SharedMap<String, Object> config;
-
     private final ChannelHandlerContext channel;
     private final INet request;
     private final DepositSvc depositSvc;
@@ -53,22 +51,6 @@ public final class DepositApi {
         this.depositSvc = depositSvc;
     }
 
-    /**
-     * 기동 시 내부 경로 키를 지정한다. 키가 없으면 경로를 열지 않는다.
-     *
-     * <p>내부 경로는 WX_ADM·WX_TASK·입금 통지 시스템이 모두 {@code internal_api.key} 하나를 쓴다.
-     * 경로만 나눠 두고 키와 허용 주소는 한 집합으로 관리한다.</p>
-     */
-    public static void configure(SharedMap<String, Object> property) {
-
-        if (property.getString("internal_api.key").length() < 32) {
-            logger.warn("내부 경로 키(internal_api.key)가 없어 입금 통지 경로를 열지 않는다.");
-            return;
-        }
-        config = property.copy();
-        logger.info("입금 통지 경로를 연다: 허용 주소={}", WalletConfig.internalAllowedIps());
-    }
-
     /** /api/internal/deposit/notify: 입금 통지를 기록하고 Wallet 이 정해지면 바로 반영한다. */
     @Route(target = {"/notify"}, loggable = false)
     public INet depositNotify() {
@@ -76,13 +58,13 @@ public final class DepositApi {
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
-        if (config == null) {
+        if (!WalletConfig.internalReady()) {
             return InternalInetUtils.response(request,
                     InternalInetUtils.error("TX503", "입금 통지 경로가 설정되지 않았습니다."));
         }
         try {
             SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", config.getString("internal_api.key"), FRAME);
+                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), FRAME);
             // 접속 주소는 통지가 말하는 값이 아니라 실제 접속 주소를 쓴다. 감사 이력에 이 값이 남는다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
             return InternalInetUtils.response(request, depositSvc.receive(input, clientIp, trace));

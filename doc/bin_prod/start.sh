@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 PROC_NAME="WX_API"
-MAIN_CLASS="kr.tx24.inet.server.INetServer2"
+MAIN_CLASS="kr.tx24.inet.server.INetServer"
 BASE_PACKAGE="kr.tx24.wx.api.ctl"
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd)"

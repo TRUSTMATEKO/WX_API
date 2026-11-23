@@ -39,7 +39,7 @@
          package kr.tx24.task.main;
          ========================================================= -->
 
-    <property name="main.class" value="kr.tx24.task.main.TaskLauncher"/>
+    <property name="main.class" value="kr.tx24.inet.server.INetServer"/>
 
     <!-- =========================================================
          컴파일 Classpath

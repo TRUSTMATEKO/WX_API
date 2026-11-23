@@ -38,8 +38,6 @@ public final class HqWalletApi {
 
     private static final Logger logger = LoggerFactory.getLogger(HqWalletApi.class);
 
-    private static volatile SharedMap<String, Object> config;
-
     private final ChannelHandlerContext channel;
     private final INet request;
     private final HqWalletSvc hqWalletSvc;
@@ -51,16 +49,6 @@ public final class HqWalletApi {
         this.channel = channel;
         this.request = request;
         this.hqWalletSvc = hqWalletSvc;
-    }
-
-    /** 기동 시 본사 전용 키를 지정한다. 키가 없으면 경로를 열지 않는다. */
-    public static void configure(SharedMap<String, Object> property) {
-
-        if (property.getString("internal_api.key").length() < 32) {
-            logger.warn("내부 경로 키(internal_api.key)가 없어 Wallet 이전 경로를 열지 않는다.");
-            return;
-        }
-        config = property.copy();
     }
 
     /** /api/internal/wallet/collect: 고객사 Wallet에서 본사 Wallet으로 옮긴다. */
@@ -87,14 +75,14 @@ public final class HqWalletApi {
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
-        if (config == null) {
+        if (!WalletConfig.internalReady()) {
             return InternalInetUtils.response(request,
                     InternalInetUtils.error("TX503", "Wallet 이전 경로가 설정되지 않았습니다."));
         }
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
             SharedMap<String, Object> input = InternalInetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", config.getString("internal_api.key"), 8192);
+                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
             SharedMap<String, Object> data = "collect".equals(direction)
