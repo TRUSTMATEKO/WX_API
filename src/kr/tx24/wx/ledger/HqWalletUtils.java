@@ -19,7 +19,7 @@ public final class HqWalletUtils {
     public static String post(Connection db, String hqId, long delta, String source, String refId,
             int refSeq, String actor, LocalDateTime postedAt) throws SQLException {
 
-        if (db.getAutoCommit() || !"WX".equals(db.getCatalog()) || delta == 0 || refSeq < 1) {
+        if (db.getAutoCommit() || delta == 0 || refSeq < 1) {
             throw new SQLException("본사 Wallet 분개 입력과 업무 트랜잭션을 확인하세요.");
         }
         String wallet;
