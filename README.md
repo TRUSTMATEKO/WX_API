@@ -3,17 +3,17 @@
 Java 17, Ant, TX24_LIB 및 INet을 사용한다.
 
 구동은 OPL_API와 같다. 전용 Launcher 없이 범용 `kr.tx24.inet.server.INetServer`를 Main Class로 띄우고,
-`Router`가 `basePackage`(`kr.tx24.wx.api.ctl`) 아래 `@Controller`를 적재한다. 업무 설정은 그 적재 시점에
-`WalletConfig`가 `inet.json`의 `property`에서 한 번 읽는다(OPL_API의 `CoreConstants`와 같은 자리).
+`Router`가 `basePackage`(`kr.tx24.wx.api.ctl`) 아래 `@Controller`를 적재할 때 `WalletConfig`가
+`WX.CONFIG`에 등록된 기관 환경을 적용한다.
 `kr.tx24.wx.api.main.Launcher`는 기동에 쓰지 않는 `--check` 전용 진단 도구다.
 
 ## 연결 설정
 
 - 시스템 설정의 내부 연동 허용 IP와 인증키는 WX.CONFIG에서 읽는다. WX_ADM·WX_TASK·입금 통지 송신자가 사용한다. 두 호출자는 이 `port`를 각자 `conf/nlb.json`의 `WX_API` 그룹에 둔다. Redis 주소는 실행 스크립트가 `-DREDIS`로 준다.
 - `host`와 `port`는 서버 설정이다. 게이트웨이 허용 IP와 기관 연동 환경(test/prod)은 WX_ADM 시스템 설정에서 관리한다. 둘 중 하나가 아니면 송금을 접수하지 않고 조회만 제공한다.
-- NGINX에서는 `proxy_set_header X-Forwarded-For $remote_addr;`로 값을 덮어쓰고 TX24_HTTP가 INet에 전달한다. TX24_HTTP 라우트가 authorization 헤더를 전달해야 한다. 이어진 IP 문자열은 거절한다. WX DB의 인증 키에 저장된 `WALLET_API_KEY.ips`의 IPv4·IPv6 CIDR 규칙과 대조한다.
+- NGINX에서는 `proxy_set_header X-Forwarded-For $remote_addr;`로 값을 덮어쓴다. WX_API는 TX24_HTTP가 기본 전달한 `remoteIp`를 Wallet의 `WX.WALLET_API_IPS`에 등록된 IPv4·IPv6 주소 또는 CIDR과 대조한다. 고객사 API 접속마다 `walletId`와 `remoteIp`를 INFO 로그에 기록하며, 확인할 수 없는 값은 `미확인`으로 기록한다.
 - 배포 전후 점검은 `java -DPROC=WX_API -DCONF=<conf> -cp WX_API.jar kr.tx24.wx.api.main.Launcher --check`로 한다. 수신 포트를 열지 않고 설정·원장 연결·업무 스키마만 확인한다.
-- `ai/tools/verify-isolated.ps1`은 일회성 포트·키로 WX_API·WX_TASK의 원장 연결을 검증한다. 수신부는 TX24_HTTP가 보내는 INet 경로 하나다.
+- `ai/tools/verify-isolated.ps1`은 WX_API의 원장 연결을 점검하고 임시 루프백 포트에서 INet 수신과 경로 적재를 확인한다.
 
 ## 공개 Wallet 계약
 

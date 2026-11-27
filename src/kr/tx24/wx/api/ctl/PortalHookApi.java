@@ -9,9 +9,13 @@ import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.utils.INetUtils;
 import kr.tx24.wx.ledger.WxWebhookRps;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Controller(target = "/api/internal/portal")
 public final class PortalHookApi {
+
+    private static final Logger logger = LoggerFactory.getLogger(PortalHookApi.class);
 
     private final ChannelHandlerContext channel;
     private final INet request;
@@ -38,8 +42,7 @@ public final class PortalHookApi {
         } catch (SecurityException refused) {
             return INetUtils.response(request, INetUtils.error("TX401", "포털 요청 경로와 키를 확인하세요."));
         } catch (Exception failure) {
-            org.slf4j.LoggerFactory.getLogger(PortalHookApi.class)
-                    .warn("고객사 웹훅 재전송 처리 실패: type={}", failure.getClass().getSimpleName());
+            logger.warn("고객사 웹훅 재전송 처리 실패: type={}", failure.getClass().getSimpleName());
             return INetUtils.response(request, INetUtils.error("TX503", "재전송 접수 결과를 확인해 주세요."));
         }
     }

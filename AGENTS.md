@@ -4,6 +4,8 @@ Java 17, Ant, TX24_LIB와 SharedMap을 사용한다. 원본 T8과 TX24_EXT는 �
 
 연동·검증 기준은 WX_ADM의 doc/wx-integration.md를 따른다.
 
+SLF4J로 로그를 남기는 클래스는 클래스 상단에 `private static final Logger logger = LoggerFactory.getLogger(클래스명.class);`를 선언하고 모든 로그 호출에 이 필드를 사용한다.
+
 NGINX와 TX24_HTTP가 전달한 단일 접속 IP는 WX의 MCHT_IP와 대조한다. HYPHEN 원본 패키지는 유지하며 시험 프로필에 연결하기 전 운영 요청을 닫는다. 고객사 웹훅은 이 프로세스가 보내지 않는다. `TRX_WEBHOOK` 에 적재하고 `WX:TASK:WEBHOOK` 큐에 id 를 올리면 WX_TASK 가 발송한다(OPL_API·OPL_TASK 와 같은 구조).
 
 송금의 공개 계약은 `docs/index.html`과 `docs/wallet-database.openapi.json`에 기록한다. 등록 IP 확인 후 Authorization 키로 HMAC-SHA256을 검증한다. 서명에는 서버에서 식별한 Wallet ID와 모든 지급 관련 요청값을 사용한다. 키 원문, checksum, 전체 계좌번호를 내부 점검 요청이나 로그에 남기지 않는다.

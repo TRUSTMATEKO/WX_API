@@ -77,8 +77,6 @@ public final class WalletFlowSvc {
                                              String contentType, InputStream body, String trace) {
 
         WalletContext etx = new WalletContext(action, authorization, clientIp, contentType, trace);
-        logger.debug("요청 수신: action={}, clientIp={}, contentType={}, trace={}",
-                action, clientIp, contentType, trace);
 
         // 접근 구역과 인증, 접수 이력까지 실패하면 업무를 시작하지 않는다.
         try {
@@ -93,6 +91,10 @@ public final class WalletFlowSvc {
         } catch (Exception failure) {
             logger.error("전처리 실패: action={}, clientIp={}, trace={}", action, clientIp, trace, failure);
             return respond(etx, WalletResult.of(failure, trace));
+        } finally {
+            logger.info("Wallet API 접속: action={}, walletId={}, remoteIp={}, trace={}",
+                    action, etx.isAuthorized() ? etx.getWalletId() : "미확인",
+                    clientIp == null || clientIp.isBlank() ? "미확인" : clientIp, trace);
         }
         logger.info("전처리 완료: action={}, walletId={}, ioId={}, trace={}",
                 action, etx.getWalletId(), etx.getIo().getString("ioId"), trace);

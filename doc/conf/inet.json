@@ -1,13 +1,5 @@
 {
   "host": "127.0.0.1",
   "port": 10033,
-  "basePackage": "kr.tx24.wx.api.ctl",
-  "property": {
-    "enabled": true,
-    "gateway.allowedIps": "127.0.0.1",
-    "internal.allowedIps": "127.0.0.1",
-    "alert.receiver": "01027423730,0100000000",
-    "env": "test",
-    "internal_api.key": "6F3D59771FFAF99AEA91AD92EDFB9FC9DA7DACE0C2F05D3EC52F84610642941B"
-  }
+  "basePackage": "kr.tx24.wx.api.ctl"
 }

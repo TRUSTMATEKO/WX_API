@@ -14,17 +14,19 @@ import kr.tx24.lib.netty.NettyUtils;
 import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.svc.WalletFlowSvc;
 import kr.tx24.wx.api.utils.INetUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 /** TX24_HTTP가 변환한 Wallet 요청을 수신한다. 흐름만 나열하고 업무는 svc 계층이 처리한다. */
 @Controller(target = "/api/v1/wallet")
 public final class MerchantApi {
 
+    private static final Logger logger = LoggerFactory.getLogger(MerchantApi.class);
+
     static {
-        // Router 가 @Controller 를 적재할 때 Class.forName 으로 이 클래스를 초기화한다. 그 자리에서
-        // 실행 설정을 확정해 기동 로그에 남기고, 전문 본문 로깅(deepview·기관 원본 로거)을 미리 끈다.
-        // 이 한 줄이 없으면 설정이 첫 요청 때 읽히고 그 전까지 차단이 걸리지 않는다.
-        WalletConfig.enabled();
+        // Router의 컨트롤러 적재 중 실행 설정을 확정하고 전문 본문 로깅을 끈다.
+        WalletConfig.initialize();
     }
 
     private final ChannelHandlerContext channel;
@@ -72,17 +74,25 @@ public final class MerchantApi {
     private INet submit(String action) {
 
         if (!INetUtils.isAllowed(NettyUtils.getRemoteAddress(channel), WalletConfig.gatewayAllowedIps())) {
+            logger.info("Wallet API 접속: action={}, walletId=미확인, remoteIp=미확인, status=403", action);
             return reject(403, "허용된 게이트웨이 경로가 필요합니다.");
         }
         INet.INMap data = request.data();
-        if (!data.isEquals("method", "POST")) return reject(405, "POST로 요청하세요.");
+        String remoteIp = data.getString("remoteIp").strip();
+        // 단일 IP에 쓰이는 문자만 받아 검증과 로그에 전달한다.
+        if (!remoteIp.matches("[0-9A-Fa-f:.]{2,45}")) remoteIp = "";
+        if (!data.isEquals("method", "POST")) {
+            logger.info("Wallet API 접속: action={}, walletId=미확인, remoteIp={}, status=405",
+                    action, remoteIp.isEmpty() ? "미확인" : remoteIp);
+            return reject(405, "POST로 요청하세요.");
+        }
 
         // 내부 로그 상관용 번호다. 고객사가 보낸 값은 받지 않는다.
         String trace = MDC.get("traceId");
         if (trace == null || !trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
         byte[] payload = data.getString("payload").getBytes(StandardCharsets.UTF_8);
         SharedMap<String, Object> result = flowSvc.wallet(action, data.getString("authorization"),
-                data.getString("x-forwarded-for").strip(), data.getString("contentType"),
+                remoteIp, data.getString("contentType"),
                 new ByteArrayInputStream(payload), trace);
         return INetUtils.response(trace, result);
     }

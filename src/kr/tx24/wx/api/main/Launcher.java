@@ -2,8 +2,6 @@ package kr.tx24.wx.api.main;
 
 import kr.tx24.inet.conf.INetConfigLoader;
 import kr.tx24.lib.lang.SystemUtils;
-import kr.tx24.lib.map.SharedMap;
-import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.wx.api.WalletZone;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
 
@@ -43,9 +41,7 @@ public final class Launcher {
         System.setProperty("PROC", "WX_API");
         INetConfigLoader.start();
 
-        // 진단은 예정 기관 환경을 적용하지 않고 서버 활성 설정만 읽는다.
-        SharedMap<String, Object> config = INetConfigLoader.getMap("property", TypeRegistry.MAP_SHAREDMAP_OBJECT);
-        if (config == null || !config.getBoolean("enabled")) throw new IllegalStateException("WX_API가 비활성입니다.");
+        // 진단에서 사용할 INet 수신 포트 설정을 확인한다.
         int port = INetConfigLoader.getPort();
         if (port < 1 || port > 65535) throw new IllegalStateException("WX_API INet 포트를 확인하세요.");
 
