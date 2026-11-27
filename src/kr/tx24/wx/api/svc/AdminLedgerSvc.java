@@ -68,6 +68,49 @@ public final class AdminLedgerSvc {
                 "id", "mchtId", "walletId", "walletTrxId", "amount", "balanceAfter");
     }
 
+    /**
+     * 통지가 오지 않은 입금을 운영자가 직접 기록하고 고른 Wallet 에 반영한다.
+     *
+     * <p>반영이 끝나면 모계좌 잔액을 기관 값으로 맞춘다. 통지를 놓친 사이 다른 입금의 맞추기가
+     * 이 금액을 이미 장부에 넣어 두었을 수 있어, 넣은 직후 실제 값으로 다시 맞춰야 장부가
+     * 실제와 벌어지지 않는다. 실패해도 입금 기록은 되돌리지 않는다.</p>
+     */
+    public SharedMap<String, Object> manualDeposit(SharedMap<String, Object> in, String clientIp, String trace) {
+
+        SharedMap<String, Object> input = internal("deposit/manual", validator.manual(in), clientIp, trace);
+        logger.info("수동 입금 접수: walletId={}, sourceType={}, amount={}, occurredAt={}, actor={}, trace={}",
+                input.getString("walletId"), input.getString("sourceType"), input.getLong("amount"),
+                input.getString("occurredAt"), input.getString("userId"), trace);
+
+        SharedMap<String, Object> data = confirmed("deposit/manual", ledger.manualDeposit(input, trace), trace);
+        logger.info("수동 입금 완료: depositId={}, walletTrxId={}, balanceAfter={}, trace={}",
+                data.getString("id"), data.getString("walletTrxId"), data.getLong("balanceAfter"), trace);
+
+        DepositSvc.syncBankBalance(ledger, data, trace);
+        return reply("입금을 기록하고 Wallet 에 반영했습니다.", data, trace,
+                "id", "status", "mchtId", "walletId", "walletTrxId", "amount", "balanceAfter");
+    }
+
+    /**
+     * 미매칭 입금을 그 모계좌의 본사 Wallet 에 반영한다.
+     *
+     * <p>이자·환급처럼 본사가 받은 돈이다. 고객사 잔액은 늘지 않고 고객사 웹훅도 보내지 않는다.
+     * 모계좌 잔액은 수신 때 이미 올라 있으므로 이 처리로 바뀌지 않는다.</p>
+     */
+    public SharedMap<String, Object> assignHqDeposit(SharedMap<String, Object> in, String clientIp, String trace) {
+
+        SharedMap<String, Object> input = internal("deposit/assign-hq", validator.assignHq(in), clientIp, trace);
+        logger.info("본사 입금 접수: depositId={}, actor={}, trace={}",
+                input.getString("depositId"), input.getString("userId"), trace);
+
+        SharedMap<String, Object> data = confirmed("deposit/assign-hq", ledger.assignHqDeposit(input, trace), trace);
+        logger.info("본사 입금 완료: depositId={}, walletId={}, walletTrxId={}, balanceAfter={}, trace={}",
+                data.getString("id"), data.getString("walletId"), data.getString("walletTrxId"),
+                data.getLong("balanceAfter"), trace);
+        return reply("입금을 본사 Wallet에 반영했습니다.", data, trace,
+                "id", "owner", "hqId", "walletId", "walletTrxId", "amount", "balanceAfter", "status");
+    }
+
     /** 미매칭 입금을 매칭하지 않고 사유를 남겨 종결한다. */
     public SharedMap<String, Object> rejectDeposit(SharedMap<String, Object> in, String clientIp, String trace) {
 
@@ -100,7 +143,26 @@ public final class AdminLedgerSvc {
                 "walletId", "mchtId", "beforeAmt", "afterAmt", "balance", "availableBalance", "changed");
     }
 
-    /** 실패로 확정된 웹훅 발송을 다시 대기로 돌린다. */
+    /**
+     * 대기 중인 월 청구서를 청구로 종결한다.
+     *
+     * <p>금액과 분개는 손대지 않는다. 돈은 일별 마감에서 이미 움직였고 월 청구서는 그 합을 고객사에
+     * 알리는 문서다. 이미 청구된 건은 {@code changed=false} 로 돌려준다.</p>
+     */
+    public SharedMap<String, Object> billInvoice(SharedMap<String, Object> in, String clientIp, String trace) {
+
+        SharedMap<String, Object> input = internal("invoice/bill", validator.bill(in), clientIp, trace);
+        logger.info("월 청구 접수: invoiceId={}, billDay={}, actor={}, trace={}",
+                input.getString("invoiceId"), input.getInt("billDay"), input.getString("userId"), trace);
+
+        SharedMap<String, Object> data = confirmed("invoice/bill", ledger.billInvoice(input, trace), trace);
+        logger.info("월 청구 완료: invoiceId={}, billDay={}, changed={}, trace={}",
+                data.getString("id"), data.getInt("billDay"), data.getBoolean("changed"), trace);
+        return reply(data.getBoolean("changed") ? "월 청구를 청구로 처리했습니다." : "이미 청구된 청구서입니다.",
+                data, trace, "id", "mchtId", "baseMonth", "status", "billDay", "totalAmt", "changed");
+    }
+
+    /** 대기 상태를 제외한 웹훅 발송을 다시 대기로 돌린다. */
     public SharedMap<String, Object> webhookRetry(SharedMap<String, Object> in, String clientIp, String trace) {
 
         SharedMap<String, Object> input = internal("webhook/retry", validator.webhookRetry(in), clientIp, trace);
@@ -109,7 +171,7 @@ public final class AdminLedgerSvc {
 
         SharedMap<String, Object> data = confirmed("webhook/retry", ledger.webhookRetry(input, trace), trace);
         return reply(data.getBoolean("changed") ? "웹훅을 다시 발송 대기로 돌렸습니다."
-                : "이미 대기이거나 발송된 건입니다.", data, trace, "id", "changed");
+                : "이미 대기 중이거나 발송 이력을 찾을 수 없습니다.", data, trace, "id", "changed");
     }
 
     /**

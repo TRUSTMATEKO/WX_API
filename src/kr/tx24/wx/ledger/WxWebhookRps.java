@@ -5,7 +5,6 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import kr.tx24.lib.kms.KMSUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
@@ -90,7 +89,7 @@ public final class WxWebhookRps {
         }
 
         String dedupKey = trxId + ":" + eventType;
-        String payload  = KMSUtils.encrypt(JacksonUtils.get().toJson(body(transfer, eventType, postedAt)));
+        String payload  = WxPostingRps.encryptForLedger(JacksonUtils.get().toJson(body(transfer, eventType, postedAt)));
         int    day      = WxPostingRps.businessDay(postedAt);
         int    stored   = 0;
         List<String> queued = new java.util.ArrayList<>();
@@ -142,10 +141,9 @@ public final class WxWebhookRps {
     }
 
     /**
-     * 실패로 확정된 발송을 다시 대기로 돌린다.
+     * 대기 상태를 제외한 발송을 다시 대기로 돌린다.
      *
-     * <p>시도 상한을 넘겨 멈춘 건을 운영자가 다시 보내게 하는 유일한 경로다. 고객사 수신처가
-     * 복구된 뒤에 쓴다. 시도 횟수를 0으로 되돌리고 <b>세대를 올린다.</b> 세대는 전송 작업기가
+     * <p>운영자 재전송은 시도 횟수를 0으로 되돌리고 <b>세대를 올린다.</b> 세대는 전송 작업기가
      * 늦게 도착한 옛 시도의 결과로 이 원장을 덮어쓰지 못하게 하는 표식이다.</p>
      *
      * <p><b>Redis 큐에 직접 넣지 않는다.</b> WX_TASK 의 복구 작업이 30초 안에 대기 행을 찾아 큐에
@@ -154,7 +152,7 @@ public final class WxWebhookRps {
      * <p>적재 행 자체는 바꾸지 않는다. 전문 본문과 수신처는 확정 당시의 값을 그대로 보낸다.
      * 그 사이에 수신처 주소가 바뀌었다면 운영자가 새 수신처를 등록하고 다시 확정해야 한다.</p>
      *
-     * @return 다시 대기로 돌린 건수. 이미 대기나 발송이면 0이다
+     * @return 다시 대기로 돌린 건수. 대기 상태이거나 이력이 없으면 0이다
      */
     public static int retry(String id, String actor) throws SQLException {
 
@@ -163,14 +161,35 @@ public final class WxWebhookRps {
                     UPDATE WX.TRX_WEBHOOK
                        SET status='대기',generation=generation+1,attemptCnt=0,sentAt=NULL,
                            httpStatus=NULL,resultMsg=NULL,elapsedMs=0
-                     WHERE id=? AND status='실패'
+                     WHERE id=? AND status<>'대기'
                     """, id);
             if (changed == 1) {
                 logger.info("웹훅 재발송 예약. 발송 복구 작업이 집어 간다: id={}, actor={}", id, actor);
             } else {
-                logger.info("웹훅 재발송 대상이 아니다. 이미 대기이거나 발송이다: id={}", id);
+                logger.info("웹훅이 이미 대기 중이거나 이력이 없다: id={}", id);
             }
             return changed;
+        }
+    }
+
+    /** 고객사 포털의 관리자와 수신처 소속을 확인하고 화면에서 본 발송 세대만 재접수한다. */
+    public static boolean retryMerchant(String merchant, String actor, String id, int generation) throws SQLException {
+
+        try (Connection db = WxDatabaseRps.open()) {
+            int changed = update(db, """
+                    UPDATE WX.TRX_WEBHOOK T
+                      JOIN WX.USER U ON U.mchtId=T.mchtId AND U.id=? AND U.unit='mcht' AND U.role=0 AND U.status='사용'
+                      JOIN WX.MCHT M ON M.mchtId=T.mchtId AND M.status='사용'
+                      JOIN WX.WALLET W ON W.id=T.walletId AND W.mchtId=T.mchtId AND W.ownerType='MCHT'
+                      JOIN WX.WALLET_HOOK H ON H.idx=T.hookIdx AND H.walletId=W.id
+                       AND H.status='사용' AND BINARY H.endpoint=BINARY T.endpoint
+                       SET T.status='대기',T.generation=T.generation+1,T.attemptCnt=0,T.sentAt=NULL,
+                           T.httpStatus=NULL,T.resultMsg=NULL,T.elapsedMs=0
+                     WHERE T.mchtId=? AND T.id=? AND T.status<>'대기' AND T.generation=?
+                    """, actor, merchant, id, generation);
+            if (!db.getAutoCommit()) db.commit();
+            if (changed == 1) logger.info("고객사 웹훅 재전송 접수: id={}, actor={}", id, actor);
+            return changed == 1;
         }
     }
 

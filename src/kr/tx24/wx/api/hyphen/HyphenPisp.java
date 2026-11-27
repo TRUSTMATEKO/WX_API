@@ -359,7 +359,10 @@ public class HyphenPisp {
 
         //예금주명을 확인하여 리턴
         LinkedMap<String,Object> resultMap = getMessage(resHead);
-        resultMap.put("balance"         , CommonUtils.parseLong(resData.getSign()+resData.getCurrentAmount()));
+        String current = resData.getCurrentAmount().trim();
+        String sign = resData.getSign().trim();
+        if (!current.matches("[0-9]{1,13}") || !sign.matches("[+-]?")) return resultMap;
+        resultMap.put("balance"         , Long.parseLong(sign + current));
         resultMap.put("availableBalance", CommonUtils.parseLong(resData.getSign()+resData.getPayAmount()));
 
         return resultMap;
@@ -627,12 +630,11 @@ public class HyphenPisp {
             throw new IllegalStateException("기관 일련번호를 나눌 모계좌 ID 가 없습니다.");
         }
         String key = HYPHEN_REDIS_SEQ + hqId;
-        long seq = RedisUtils.incr(key);
-        if(seq >= HYPHEN_SEQUENCE_LIMIT) {
-            RedisUtils.set(key, "1");
-            seq = 1;
-        }
-        return String.format("%06d", seq);
+        // Redis 증가는 한 번만 실행한다. 실제 카운터를 되감으면 경계에서 같은 번호를 두 번 발급할 수 있다.
+        long counter = RedisUtils.incr(key);
+        if (counter < 1) throw new IllegalStateException("기관 일련번호를 발급하지 못했습니다.");
+        long sequence = (counter - 1) % (HYPHEN_SEQUENCE_LIMIT - 1) + 1;
+        return String.format(java.util.Locale.ROOT, "%06d", sequence);
     }
 
     private LinkedMap<String,Object> getMessage(KRWHead resHead){

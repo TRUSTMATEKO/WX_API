@@ -6,11 +6,11 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 
-import kr.tx24.lib.kms.KMSUtils;
 import kr.tx24.lib.lang.CommonUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
+import kr.tx24.wx.api.WalletConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,6 +42,15 @@ public final class WxDepositRps {
 
     /** 통지가 알려 주는 입금시간의 모양. */
     private static final DateTimeFormatter OCCURRED = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+
+    /**
+     * 같은 입금으로 보는 시간 폭(분).
+     *
+     * <p>외부 식별자는 초까지 같아야 걸린다. 사람이 통장을 보고 적는 시각은 분까지가 보통이고
+     * 통지가 주는 초와 어긋난다. 그래서 수동 입금과 통지가 겹치는지는 이 폭 안에서 같은
+     * 모계좌·금액·입금자명인지로 한 번 더 본다.</p>
+     */
+    private static final long DUP_MINUTES = 5L;
 
     /** 자동 반영의 작업 주체. 사람이 지정한 건과 구분해 기록한다. */
     private static final String ACTOR = "WX_API";
@@ -117,11 +126,40 @@ public final class WxDepositRps {
                         .add("duplicate", true);
             }
 
+            // 운영자가 이미 수동으로 넣은 입금과 겹치는지 본다. 수동 입금은 통지가 오지 않아 넣은
+            // 것이므로, 늦게 도착한 통지가 같은 돈을 두 번 올릴 수 있다. 초가 어긋나면 위의 유니크
+            // 키를 비켜 가므로 분 단위로 같은 금액·입금자명을 본다. 사람이 넣은 건만 본다.
+            //
+            // 겹치면 원장을 움직이지 않는다. 두 쪽 다 틀릴 수 있지만 되돌릴 수 있는 쪽을 고른다 —
+            // 빠뜨린 입금은 원장 대조에서 차액으로 드러나 수동 입금으로 메울 수 있고, 두 번 올린
+            // 돈은 고객사가 출금해 가면 돌아오지 않는다.
+            List<SharedMap<String, Object>> manual = rows(db, """
+                    SELECT id,status,mchtId,walletId,walletTrxId,amount FROM WX.TRX_DEPOSIT
+                     WHERE hqId=? AND amount=? AND depositName=? AND regId<>? AND status<>'반려'
+                       AND occurredAt BETWEEN ? AND ?
+                    """, hqId, amount, depositName, ACTOR,
+                    occurred.minusMinutes(DUP_MINUTES), occurred.plusMinutes(DUP_MINUTES));
+            if (!manual.isEmpty()) {
+                SharedMap<String, Object> row = manual.get(0);
+                logger.warn("운영자가 수동으로 넣은 입금과 겹친다. 원장을 움직이지 않는다: "
+                        + "depositId={}, status={}, hqId={}, amount={}", row.getString("id"),
+                        row.getString("status"), hqId, amount);
+                return SharedMap.<String, Object>of()
+                        .add("id", row.getString("id"))
+                        .add("status", row.getString("status"))
+                        .add("mchtId", row.getString("mchtId"))
+                        .add("walletId", row.getString("walletId"))
+                        .add("walletTrxId", row.getString("walletTrxId"))
+                        .add("amount", row.getLong("amount"))
+                        .add("matched", row.isEquals("status", "완료"))
+                        .add("duplicate", true);
+            }
+
             // 돈이 들어온 계좌다. 중지된 모계좌라도 들어온 돈은 기록해야 하므로 상태로 막지 않는다.
             // 기관 설정을 함께 읽는다. 반영이 끝나면 호출자가 이 프로필로 기관 잔액을 조회한다.
             List<SharedMap<String, Object>> banks = rows(db, """
                     SELECT id,name,bankCd,bankName,balance,status,
-                           acq,acqId,bankCd AS acqBankCd,accntNo AS acqAccount,COALESCE(key2,'') AS acqKey2
+                           settingRev,acq,acqId,bankCd AS acqBankCd,accntNo AS acqAccount,COALESCE(key2,'') AS acqKey2
                       FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE
                     """, hqId);
             if (banks.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 확인해 주세요.");
@@ -131,9 +169,16 @@ public final class WxDepositRps {
                         hqId, bank.getString("status"));
             }
 
-            // Wallet 을 정한다. 가상계좌는 재고가 가리키는 Wallet, SMS는 등록한 입금자명으로 찾는다.
-            String resolved = virtual ? target.getString("walletId") : byDepositName(db, hqId, depositName);
-            SharedMap<String, Object> wallet = resolved.isEmpty() ? null : lockedWallet(db, resolved, hqId);
+            // Wallet 을 정한다. 가상계좌는 재고가 가리키는 고객사 Wallet 이고, SMS 는 입금자명이
+            // 고객사 규칙에 걸리면 그 고객사 Wallet, 모계좌 기타 입금 문구에 걸리면 본사 Wallet 이다.
+            SharedMap<String, Object> judged = virtual
+                    ? SharedMap.<String, Object>of().add("walletId", target.getString("walletId"))
+                            .add("owner", "MCHT").add("label", "")
+                    : byDepositName(db, hqId, depositName);
+            String resolved = judged == null ? "" : judged.getString("walletId");
+            boolean ours    = judged != null && judged.isEquals("owner", "HQ");
+            SharedMap<String, Object> wallet = resolved.isEmpty() ? null
+                    : ours ? lockedHqWallet(db, hqId) : lockedWallet(db, resolved, hqId);
             if (!resolved.isEmpty() && wallet == null) {
                 logger.warn("판정한 Wallet 을 잠그지 못해 미매칭으로 둔다: hqId={}, walletId={}", hqId, resolved);
             }
@@ -153,10 +198,10 @@ public final class WxDepositRps {
                     """, depositId, hqId, sourceType, externalId, vaAccntNo,
                     bankCd.isEmpty() ? bank.getString("bankCd") : bankCd,
                     bank.getString("bankName"), depositName, amount, occurred,
-                    wallet == null ? null : wallet.getString("mchtId"),
+                    wallet == null || ours ? null : wallet.getString("mchtId"),
                     wallet == null ? null : wallet.getString("walletId"),
                     status, hash,
-                    payload.isBlank() ? null : KMSUtils.encrypt(payload),
+                    payload.isBlank() ? null : WxPostingRps.encryptForLedger(payload),
                     wallet == null ? null : ACTOR,
                     wallet == null ? null : postedAt,
                     ACTOR, today, postedAt);
@@ -172,6 +217,10 @@ public final class WxDepositRps {
                     .add("duplicate", false)
                     // 기관 잔액 동기화에 쓴다. 고객사·화면 응답에는 담지 않는다.
                     .add("hqId", hqId);
+            if ("prod".equals(WalletConfig.upstreamEnv())) {
+                scheduleBalanceReview(db, hqId, depositId);
+                result.add("claimId", depositId).add("settingRev", bank.getLong("settingRev"));
+            }
             SharedMap<String, Object> profile = WxTransferRps.upstream(hqId, bank);
             if (profile != null) result.add("upstream", profile);
             if (wallet == null) {
@@ -183,22 +232,34 @@ public final class WxDepositRps {
                 return result;
             }
 
-            String ledgerId = credit(db, wallet, depositId, amount, depositName,
-                    virtual ? "가상계좌 입금 자동 매칭" : "입금자명 입금 자동 매칭",
-                    ACTOR, postedAt, today);
+            // 본사가 받은 돈(이자·환급)은 본사 Wallet 에 기타입금으로 넣고 사유 이름을 비고에 적는다.
+            String note = ours
+                    ? (judged.isBlank("label") ? "모계좌 기타 입금" : judged.getString("label"))
+                    : virtual ? "가상계좌 입금 자동 매칭" : "입금자명 입금 자동 매칭";
+            String ledgerId = ours
+                    ? creditHq(db, wallet, depositId, amount, depositName, note, ACTOR, postedAt, today)
+                    : credit(db, wallet, depositId, amount, depositName, note, ACTOR, postedAt, today);
             update(db, "UPDATE WX.TRX_DEPOSIT SET walletTrxId=? WHERE id=?", ledgerId, depositId);
-            audit(db, "DEPOSIT_RECEIVE", wallet.getString("mchtId"), depositId,
-                    "입금 수신, Wallet 자동 매칭", accessIp, ACTOR, today,
+            audit(db, ours ? "DEPOSIT_RECEIVE_HQ" : "DEPOSIT_RECEIVE",
+                    ours ? null : wallet.getString("mchtId"), depositId,
+                    ours ? "입금 수신, 모계좌 기타 입금 자동 판정: " + note : "입금 수신, Wallet 자동 매칭",
+                    accessIp, ACTOR, today,
                     SharedMap.<String, Object>of(),
                     SharedMap.<String, Object>of().add("status", status).add("amount", amount)
+                            .add("owner", ours ? "HQ" : "MCHT")
                             .add("walletId", wallet.getString("walletId")).add("walletTrxId", ledgerId));
-            logger.info("입금 자동 매칭 완료: depositId={}, sourceType={}, mchtId={}, walletId={}, walletTrxId={}, amount={}",
-                    depositId, sourceType, wallet.getString("mchtId"), wallet.getString("walletId"),
-                    ledgerId, amount);
-            result.add("mchtId", wallet.getString("mchtId"))
-                    .add("walletId", wallet.getString("walletId"))
+            logger.info("입금 자동 매칭 완료: depositId={}, sourceType={}, owner={}, mchtId={}, walletId={}, "
+                    + "walletTrxId={}, amount={}", depositId, sourceType, ours ? "HQ" : "MCHT",
+                    ours ? "-" : wallet.getString("mchtId"), wallet.getString("walletId"), ledgerId, amount);
+            result.add("walletId", wallet.getString("walletId"))
                     .add("walletTrxId", ledgerId)
                     .add("balanceAfter", wallet.getLong("balance") + amount)
+                    .add("owner", ours ? "HQ" : "MCHT");
+            if (ours) {
+                // 받을 고객사가 없다. 고객사 통지를 적재하지 않는다.
+                return result;
+            }
+            result.add("mchtId", wallet.getString("mchtId"))
                     // 고객사 통지는 확정과 같은 트랜잭션에 적재한다. 발송은 WX_TASK 가 한다.
                     .add("trxId", depositId)
                     .add("depositName", depositName)
@@ -220,7 +281,7 @@ public final class WxDepositRps {
     private static SharedMap<String, Object> byVirtual(Connection db, String vaAccntNo) throws SQLException {
 
         List<SharedMap<String, Object>> found = rows(db, """
-                SELECT hqId,COALESCE(walletId,'') AS walletId FROM WX.VA_ACCNT
+                SELECT hqId,COALESCE(walletId,'') AS walletId FROM WX.HQ_VACCNT
                  WHERE accntNo=? AND status='사용'
                 """, vaAccntNo);
         if (found.isEmpty()) {
@@ -267,26 +328,58 @@ public final class WxDepositRps {
      *
      * @return 정해진 Wallet ID, 또는 정해지지 않으면 공백
      */
-    private static String byDepositName(Connection db, String hqId, String depositName) throws SQLException {
+    /**
+     * 입금자명으로 받을 Wallet 을 정한다. 고객사 규칙과 모계좌 기타 입금 규칙을 함께 본다.
+     *
+     * <p>SMS 통지의 이름은 은행에서 잘려 들어온다. 등록값이 통지 이름에 들어 있거나 통지 이름이
+     * 등록값에 들어 있으면 후보다. 판정은 DB 의 {@code LIKE} 로 하고 애플리케이션에서 이름을
+     * 자르지 않는다. 한 자 이름은 거꾸로 보지 않는다 — 너무 많이 걸린다.</p>
+     *
+     * <p>보는 곳이 둘이다.</p>
+     * <ul>
+     *   <li>{@code WALLET_MATCH} — 고객사 Wallet 의 입금자명. 그 고객사 Wallet 으로 간다</li>
+     *   <li>{@code HQ_DEPOSIT_RULE} — 모계좌 공통 기타 입금 문구(이자·환급 등). 그 입금이 들어온
+     *       모계좌의 <b>본사 Wallet</b> 으로 가고 사유 이름이 분개 비고가 된다</li>
+     * </ul>
+     *
+     * <p><b>후보가 정확히 하나일 때만 돌려준다.</b> 둘 이상이면 동명이인이거나 짧은 문구가 여러
+     * 규칙에 걸린 것이므로 미매칭으로 두고 사람이 고른다. 고객사 규칙과 본사 문구가 같은 이름에
+     * 걸리는 경우도 그렇다 — 어느 쪽인지 기계가 정할 수 없다.</p>
+     *
+     * @return {@code walletId}·{@code owner}(MCHT 또는 HQ)·{@code label}, 정해지지 않으면 null
+     */
+    private static SharedMap<String, Object> byDepositName(Connection db, String hqId, String depositName)
+            throws SQLException {
 
         boolean similar = depositName.length() >= 2;
+        String mine = similar
+                ? "(? LIKE CONCAT('%',C.matchValue,'%') OR C.matchValue LIKE CONCAT('%',?,'%'))"
+                : "(? LIKE CONCAT('%',C.matchValue,'%'))";
+        // 모계좌 기타 입금은 **완전 일치**다. `이자` 같은 짧은 문구를 LIKE 로 보면 `이자까페` 처럼
+        // 고객사 입금자명까지 걸려 고객사 돈이 본사로 간다. 이자 통지의 적요는 잘리지 않으므로
+        // 완전 일치로 충분하다. 고객사 쪽은 SMS 이름이 잘려 오므로 양방향 LIKE 를 그대로 둔다.
         String sql = """
-                SELECT DISTINCT W.id AS walletId
-                  FROM WX.MCHAT_MATCH C JOIN WX.WALLET W ON W.id=C.walletId
-                 WHERE C.hqId=? AND C.status='사용' AND C.matchType='depositor'
-                   AND W.ownerType='MCHT' AND W.status='사용'
-                   AND (? LIKE CONCAT('%',C.matchValue,'%')
-                """
-                + (similar ? " OR C.matchValue LIKE CONCAT('%',?,'%'))" : ")")
-                + " LIMIT 2";
+                SELECT walletId, owner, label FROM (
+                  SELECT DISTINCT W.id AS walletId, 'MCHT' AS owner, '' AS label
+                    FROM WX.WALLET_MATCH C JOIN WX.WALLET W ON W.id=C.walletId
+                   WHERE C.hqId=? AND C.status='사용' AND C.matchType='depositor'
+                     AND W.ownerType='MCHT' AND W.status='사용'
+                     AND %s
+                  UNION ALL
+                  SELECT DISTINCT W.id AS walletId, 'HQ' AS owner, R.label AS label
+                    FROM WX.HQ_DEPOSIT_RULE R JOIN WX.WALLET W ON W.hqWalletHqId=?
+                   WHERE R.status='사용' AND W.ownerType='HQ' AND W.status='사용'
+                     AND R.matchValue=?
+                ) F LIMIT 2
+                """.formatted(mine);
         List<SharedMap<String, Object>> found = similar
-                ? rows(db, sql, hqId, depositName, depositName)
-                : rows(db, sql, hqId, depositName);
-        if (found.size() == 1) return found.get(0).getString("walletId");
+                ? rows(db, sql, hqId, depositName, depositName, hqId, depositName)
+                : rows(db, sql, hqId, depositName, hqId, depositName);
+        if (found.size() == 1) return found.get(0);
         if (found.size() > 1) {
             logger.warn("입금자명 후보가 둘 이상이어서 자동 매칭하지 않는다: hqId={}, 후보={}건", hqId, found.size());
         }
-        return "";
+        return null;
     }
 
     /**
@@ -326,6 +419,57 @@ public final class WxDepositRps {
         return found.size() == 1 ? found.get(0) : null;
     }
 
+    /** 입금과 같은 트랜잭션에서 모계좌별 최신 대조 대상을 보관한다. 첫 조회는 입금 처리기가 맡는다. */
+    static void scheduleBalanceReview(Connection db, String hqId, String depositId) throws SQLException {
+
+        update(db, """
+                INSERT INTO WX.HQ_BALANCE_RETRY(hqId,depositId,claimId,retryAt)
+                VALUES(?,?,?,NOW()+INTERVAL 2 MINUTE)
+                ON DUPLICATE KEY UPDATE depositId=VALUES(depositId),claimId=VALUES(claimId),retryAt=VALUES(retryAt)
+                """, hqId, depositId, depositId);
+    }
+
+    /** 작업기 주기에 기한이 지난 한 계좌를 선점하고 현재 기관 설정을 읽는다. */
+    public static SharedMap<String, Object> claimBalanceReview() throws SQLException {
+
+        return transaction(db -> {
+            List<SharedMap<String, Object>> jobs = rows(db, """
+                    SELECT hqId,depositId AS id FROM WX.HQ_BALANCE_RETRY WHERE retryAt<=NOW()
+                     ORDER BY retryAt,hqId LIMIT 1 FOR UPDATE
+                    """);
+            if (jobs.isEmpty()) return null;
+            SharedMap<String, Object> job = jobs.get(0);
+            String hqId = job.getString("hqId");
+            String claimId = IDUtils.getRandom(32);
+            update(db, "UPDATE WX.HQ_BALANCE_RETRY SET claimId=?,retryAt=NOW()+INTERVAL 2 MINUTE WHERE hqId=?",
+                    claimId, hqId);
+            job.add("claimId", claimId);
+            List<SharedMap<String, Object>> banks = rows(db, """
+                    SELECT settingRev,acq,acqId,bankCd AS acqBankCd,accntNo AS acqAccount,key2 AS acqKey2
+                      FROM WX.HQ_ACCNT WHERE id=?
+                    """, hqId);
+            if (!banks.isEmpty()) {
+                SharedMap<String, Object> bank = banks.get(0);
+                job.add("settingRev", bank.getLong("settingRev"));
+                SharedMap<String, Object> profile = WxTransferRps.upstream(hqId, bank);
+                if (profile != null) job.add("upstream", profile);
+            }
+            return job;
+        });
+    }
+
+    /** 입금 잔액 대조: 기관 조회 전에 모계좌 원장의 마지막 순번과 거래 예약을 읽는다. */
+    public static long balanceRevision(String hqId) throws SQLException {
+
+        try (Connection db = WxDatabaseRps.open()) {
+            List<SharedMap<String, Object>> found = rows(db, """
+                    SELECT COALESCE((SELECT MAX(T.idx) FROM WX.TRX_HQ T WHERE T.hqId=H.id),0) revision
+                      FROM WX.HQ_ACCNT H WHERE H.id=? AND H.reservedAmt=0
+                    """, hqId);
+            return found.isEmpty() ? -1 : found.get(0).getLong("revision");
+        }
+    }
+
     /**
      * 모계좌 잔액을 기관이 알려준 값으로 맞춘다.
      *
@@ -340,20 +484,21 @@ public final class WxDepositRps {
      * <p>조정은 고객 Wallet 잔액을 건드리지 않는다. 모계좌에 돈이 더 있거나 덜 있다는 사실만 기록한다.
      * 그 돈의 주인을 정하는 것은 입금 매칭이 할 일이다.</p>
      *
-     * @param hqId      모계좌 ID
-     * @param depositId 이 동기화를 일으킨 입금번호. 같은 입금으로 두 번 조정하지 않도록 열쇠로 쓴다
+     * @param job 모계좌와 입금번호, 선점 식별자, 조회에 사용한 설정 버전
      * @param reported  기관이 알려준 실제 잔액
      * @return 조정 전후와 차이. 조정하지 않았으면 {@code changed=false}
      */
-    public static SharedMap<String, Object> syncBalance(String hqId, String depositId, long reported)
+    public static SharedMap<String, Object> syncBalance(SharedMap<String, Object> job, long reported, long revision)
             throws SQLException {
 
-        if (hqId == null || hqId.isBlank() || depositId == null || depositId.isBlank()) {
+        String hqId = job.getString("hqId");
+        String depositId = job.getString("id");
+        if (hqId.isBlank() || depositId.isBlank() || job.isBlank("claimId") || revision < 0) {
             throw new LedgerEx(LedgerCode.INVALID, "모계좌 잔액 동기화 입력을 확인해 주세요.");
         }
         return transaction(db -> {
             List<SharedMap<String, Object>> banks = rows(db, """
-                    SELECT id,bankCd,bankName,balance FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE
+                    SELECT id,bankCd,bankName,balance,reservedAmt,settingRev FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE
                     """, hqId);
             if (banks.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 확인해 주세요.");
             SharedMap<String, Object> bank = banks.get(0);
@@ -366,6 +511,19 @@ public final class WxDepositRps {
                     .add("reported", reported)
                     .add("delta", delta)
                     .add("changed", false);
+            // 모계좌 행을 잠근 뒤 기관 조회 중 커밋된 분개가 있는지 현재 값을 읽는다.
+            List<SharedMap<String, Object>> latest = rows(db, """
+                    SELECT idx FROM WX.TRX_HQ WHERE hqId=? ORDER BY idx DESC LIMIT 1 FOR UPDATE
+                    """, hqId);
+            long currentRevision = latest.isEmpty() ? 0 : latest.get(0).getLong("idx");
+            if (bank.getLong("reservedAmt") != 0 || currentRevision != revision
+                    || bank.getLong("settingRev") != job.getLong("settingRev")) {
+                logger.warn("모계좌의 거래가 진행 중이거나 원장이 변경되어 잔액 조정을 보류한다: hqId={}", hqId);
+                return result.add("deferred", true);
+            }
+            // 새 입금 또는 다음 선점이 있으면 이전 응답은 폐기한다. 삭제와 원장 반영은 함께 커밋한다.
+            if (update(db, "DELETE FROM WX.HQ_BALANCE_RETRY WHERE hqId=? AND depositId=? AND claimId=?",
+                    hqId, depositId, job.getString("claimId")) != 1) return result.add("deferred", true);
             if (delta == 0) {
                 logger.debug("모계좌 잔액이 기관 값과 같다: hqId={}, balance={}", hqId, before);
                 return result;
@@ -374,18 +532,13 @@ public final class WxDepositRps {
             LocalDateTime postedAt = WxPostingRps.postingTime(db);
             int today = WxPostingRps.businessDay(postedAt);
             // 같은 입금으로 두 번 조정하지 않는다. UK_TRX_HQ_ACCNT_2(hqId,refType,refId) 가 막는다.
-            int written = update(db, """
+            update(db, """
                     INSERT INTO WX.TRX_HQ(id,hqId,status,trxType,dtlType,refType,refId,amount,balance,balanceAfter,
                                           bankCd,bankName,summary,trxDay,trxDate,regId,regDay)
                     VALUES(?,?,'성공',?,'잔액조정','HQ_BALANCE_SYNC',?,?,?,?,?,?,?,?,?,?,?)
-                    ON DUPLICATE KEY UPDATE id=id
                     """, IDUtils.getUnique("H"), hqId, delta > 0 ? "입금" : "출금", depositId, delta, before,
                     reported, bank.getString("bankCd"), bank.getString("bankName"),
                     "입금 수신 후 기관 잔액 동기화", today, postedAt, ACTOR, today);
-            if (written != 1) {
-                logger.info("이미 조정한 입금이다. 다시 맞추지 않는다: hqId={}, depositId={}", hqId, depositId);
-                return result;
-            }
             if (update(db, "UPDATE WX.HQ_ACCNT SET balance=? WHERE id=?", reported, hqId) != 1) {
                 throw new SQLException("모계좌 잔액 동기화 반영에 실패했습니다.");
             }
@@ -454,6 +607,292 @@ public final class WxDepositRps {
         });
         WxWebhookRps.publish(out);
         return out;
+    }
+
+
+    /**
+     * 수동 입금: 통지가 오지 않은 입금을 운영자가 직접 기록하고 고른 Wallet 에 반영한다.
+     *
+     * <p>SMS 중계가 멈췄거나 기관 가상계좌 통지가 끊긴 동안 들어온 돈은 WX 가 모른다. 통장에는
+     * 있고 원장에는 없다. 운영자가 통장 거래내역을 보고 이 경로로 넣는다. <b>통지와 거꾸로</b>
+     * 돈다 — 통지는 계좌번호가 Wallet 을 알려 주지만, 여기서는 운영자가 고른 Wallet 이 모계좌와
+     * 계좌번호를 알려 준다. 사람이 판단한 것이므로 입금자명 규칙으로 다시 찾지 않는다.</p>
+     *
+     * <p>기록한 뒤의 처리는 자동 매칭과 완전히 같다. 모계좌 원장과 Wallet 분개를 쓰고, 잔액은
+     * 트리거가 올리고, 고객사 웹훅({@code deposit.credited})을 같은 트랜잭션에 적재한다. 고객사는
+     * 사람이 넣었는지 알 필요가 없다.</p>
+     *
+     * <p><b>두 번 들어오는 것을 두 군데서 막는다.</b> 외부 식별자를 통지와 같은 규칙으로 만들어
+     * 늦게 도착한 통지가 유니크 키에 걸리게 하고, 초가 어긋나 그 키를 비켜 가는 경우를 위해
+     * 같은 모계좌·금액·입금자명이 {@code DUP_MINUTES} 안에 있으면 거절한다. 운영자가 두 번 누른
+     * 경우도 같은 검사에 걸린다.</p>
+     *
+     * <p>사람이 넣었다는 사실은 {@code regId}·{@code matchedBy} 에 운영자 ID 로 남는다. 자동
+     * 반영은 {@code WX_API} 다. 감사 이력의 업무 이름은 {@code DEPOSIT_MANUAL} 이다.</p>
+     */
+    public static SharedMap<String, Object> manual(SharedMap<String, Object> in) throws SQLException {
+
+        String walletId    = WxPostingRps.field(in, "walletId", 32);
+        String sourceType  = WxPostingRps.field(in, "sourceType", 12);
+        String depositName = WxPostingRps.field(in, "depositName", 128);
+        String occurredAt  = WxPostingRps.field(in, "occurredAt", 14);
+        String actor       = WxPostingRps.field(in, "userId", 24);
+        String reason      = WxPostingRps.field(in, "reason", 128);
+        String accessIp    = in.getString("clientIp");
+        long   amount      = in.getLong("amount");
+
+        boolean virtual = "va".equals(sourceType);
+        if (!virtual && !"sms".equals(sourceType)) {
+            throw new LedgerEx(LedgerCode.INVALID, "수신경로는 가상계좌 또는 SMS 입니다.");
+        }
+        if (amount <= 0) throw new LedgerEx(LedgerCode.INVALID, "입금액을 확인해 주세요.");
+        if (!occurredAt.matches("[0-9]{14}")) {
+            throw new LedgerEx(LedgerCode.INVALID, "입금시간은 yyyyMMddHHmmss 형식입니다.");
+        }
+        LocalDateTime occurred = LocalDateTime.parse(occurredAt, OCCURRED);
+
+        SharedMap<String, Object> out = transaction(db -> {
+            // 모계좌는 Wallet 이 알려 준다. 운영자는 돈의 주인을 고르고, 어느 계좌로 들어왔는지는
+            // 그 Wallet 의 귀속이 정한다. 두 값을 따로 받으면 서로 어긋난 조합을 고를 수 있다.
+            List<SharedMap<String, Object>> owners = rows(db,
+                    "SELECT hqId FROM WX.WALLET WHERE id=? AND ownerType='MCHT'", walletId);
+            if (owners.isEmpty()) throw new LedgerEx(LedgerCode.NOT_FOUND, "고객사 Wallet 을 확인해 주세요.");
+            String hqId = owners.get(0).getString("hqId");
+
+            SharedMap<String, Object> wallet = lockedWallet(db, walletId, hqId);
+            if (wallet == null) {
+                throw new LedgerEx(LedgerCode.CONFLICT, "사용 중인 고객사 Wallet 만 지정할 수 있습니다.");
+            }
+
+            List<SharedMap<String, Object>> banks = rows(db, """
+                    SELECT id,name,bankCd,bankName,accntNo,balance,status,
+                           settingRev,acq,acqId,bankCd AS acqBankCd,accntNo AS acqAccount,COALESCE(key2,'') AS acqKey2
+                      FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE
+                    """, hqId);
+            if (banks.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 확인해 주세요.");
+            SharedMap<String, Object> bank = banks.get(0);
+            if (!bank.isEquals("status", "사용")) {
+                logger.warn("사용 중이 아닌 모계좌에 수동 입금을 넣는다: hqId={}, status={}, actor={}",
+                        hqId, bank.getString("status"), actor);
+            }
+
+            // 통지가 보내 올 계좌번호를 여기서 세운다. 가상계좌는 그 Wallet 에 할당된 번호,
+            // SMS 는 모계좌번호다. 외부 식별자를 통지와 같은 규칙으로 만들어야 늦게 온 통지가
+            // 유니크 키에 걸려 두 번 반영되지 않는다.
+            String vaAccntNo  = virtual ? virtualOf(db, walletId) : "";
+            String accntNo    = virtual ? vaAccntNo : bank.getString("accntNo");
+            String externalId = externalId(sourceType, accntNo, occurredAt, amount, depositName);
+
+            if (!rows(db, """
+                    SELECT id FROM WX.TRX_DEPOSIT WHERE hqId=? AND sourceType=? AND externalId=? FOR UPDATE
+                    """, hqId, sourceType, externalId).isEmpty()) {
+                throw new LedgerEx(LedgerCode.CONFLICT,
+                        "같은 입금이 이미 기록되어 있습니다. 입금내역에서 확인해 주세요.");
+            }
+            // 초가 어긋나면 위 열쇠를 비켜 간다. 사람이 적는 시각은 분까지가 보통이므로 분 단위로
+            // 같은 금액·입금자명을 한 번 더 본다. 범위 조회라 잠그지 않는다 — 열쇠는 위가 지킨다.
+            List<SharedMap<String, Object>> near = rows(db, """
+                    SELECT id,status,regId FROM WX.TRX_DEPOSIT
+                     WHERE hqId=? AND amount=? AND depositName=? AND status<>'반려'
+                       AND occurredAt BETWEEN ? AND ?
+                    """, hqId, amount, depositName,
+                    occurred.minusMinutes(DUP_MINUTES), occurred.plusMinutes(DUP_MINUTES));
+            if (!near.isEmpty()) {
+                logger.warn("같은 시각대의 입금이 이미 있어 수동 입금을 거절한다: hqId={}, 기존={}, actor={}",
+                        hqId, near.get(0).getString("id"), actor);
+                throw new LedgerEx(LedgerCode.CONFLICT,
+                        "같은 시각·금액·입금자명의 입금이 이미 있습니다(" + near.get(0).getString("id")
+                                + "). 중복이 아닌지 확인해 주세요.");
+            }
+
+            LocalDateTime postedAt = WxPostingRps.postingTime(db);
+            int    today     = WxPostingRps.businessDay(postedAt);
+            String depositId = IDUtils.getUnique("D");
+            String hash      = CommonUtils.hashSHA256(sourceType + "|" + hqId + "|" + externalId);
+            // 통지 전문 대신 운영자가 적어 넣은 값을 남긴다. 나중에 무엇을 근거로 넣었는지 본다.
+            String payload   = JacksonUtils.get().toJson(SharedMap.<String, Object>of()
+                    .add("manual", true).add("actor", actor).add("reason", reason)
+                    .add("sourceType", sourceType).add("occurredAt", occurredAt).add("amount", amount));
+
+            update(db, """
+                    INSERT INTO WX.TRX_DEPOSIT(id,hqId,sourceType,externalId,vaAccntNo,bankCd,bankName,
+                                               depositName,amount,occurredAt,mchtId,walletId,status,payloadHash,
+                                               payloadEnc,matchedBy,matchedAt,regId,regDay,regDate)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'완료',?,?,?,?,?,?,?)
+                    """, depositId, hqId, sourceType, externalId, vaAccntNo,
+                    bank.getString("bankCd"), bank.getString("bankName"), depositName, amount, occurred,
+                    wallet.getString("mchtId"), walletId, hash, WxPostingRps.encryptForLedger(payload),
+                    actor, postedAt, actor, today, postedAt);
+
+            // 돈은 모계좌에 들어와 있다. 통지로 들어온 입금과 같은 자리에 같은 분개를 남긴다.
+            hqLedger(db, bank, depositId, amount, depositName, postedAt, today);
+
+            String ledgerId = credit(db, wallet, depositId, amount, depositName, reason,
+                    actor, postedAt, today);
+            update(db, "UPDATE WX.TRX_DEPOSIT SET walletTrxId=? WHERE id=?", ledgerId, depositId);
+
+            audit(db, "DEPOSIT_MANUAL", wallet.getString("mchtId"), depositId, reason, accessIp, actor, today,
+                    SharedMap.<String, Object>of(),
+                    SharedMap.<String, Object>of().add("status", "완료").add("sourceType", sourceType)
+                            .add("amount", amount).add("occurredAt", occurredAt)
+                            .add("depositName", depositName).add("walletId", walletId)
+                            .add("walletTrxId", ledgerId));
+
+            logger.info("수동 입금 완료: depositId={}, sourceType={}, mchtId={}, walletId={}, walletTrxId={}, "
+                    + "amount={}, actor={}", depositId, sourceType, wallet.getString("mchtId"), walletId,
+                    ledgerId, amount, actor);
+
+            SharedMap<String, Object> result = SharedMap.<String, Object>of()
+                    .add("id", depositId)
+                    .add("status", "완료")
+                    .add("mchtId", wallet.getString("mchtId"))
+                    .add("walletId", walletId)
+                    .add("walletTrxId", ledgerId)
+                    .add("amount", amount)
+                    .add("balanceAfter", Math.addExact(wallet.getLong("balance"), amount))
+                    .add("hqId", hqId)
+                    // 자동 매칭과 같은 이벤트를 보낸다. 고객사는 사람이 넣었는지 알 필요가 없다.
+                    .add("trxId", depositId)
+                    .add("depositName", depositName)
+                    .add("sourceType", sourceType);
+            if ("prod".equals(WalletConfig.upstreamEnv())) {
+                scheduleBalanceReview(db, hqId, depositId);
+                result.add("claimId", depositId).add("settingRev", bank.getLong("settingRev"));
+            }
+            SharedMap<String, Object> profile = WxTransferRps.upstream(hqId, bank);
+            if (profile != null) result.add("upstream", profile);
+            WxWebhookRps.enqueue(db, result, WxWebhookRps.DEPOSIT_CREDITED, postedAt);
+            return result;
+        });
+        WxWebhookRps.publish(out);
+        return out;
+    }
+
+    /**
+     * 그 Wallet 에 할당된 가상계좌번호.
+     *
+     * <p>가상계좌로 들어온 입금을 수동으로 넣으려면 번호가 있어야 한다. 번호가 없으면 어느
+     * 가상계좌로 들어온 돈인지 말할 수 없고, 늦게 온 통지와 겹치는지도 볼 수 없다.</p>
+     */
+    private static String virtualOf(Connection db, String walletId) throws SQLException {
+
+        List<SharedMap<String, Object>> found = rows(db,
+                "SELECT accntNo FROM WX.HQ_VACCNT WHERE walletId=? AND status='사용'", walletId);
+        if (found.isEmpty()) {
+            throw new LedgerEx(LedgerCode.CONFLICT,
+                    "이 Wallet 에 할당된 가상계좌가 없습니다. 가상계좌를 먼저 할당하거나 SMS 로 넣어 주세요.");
+        }
+        return found.get(0).getString("accntNo");
+    }
+
+
+    /**
+     * 본사 입금: 미매칭 입금을 그 모계좌의 <b>본사 Wallet</b> 에 넣는다.
+     *
+     * <p>통장에 들어오는 돈이 모두 고객사 것은 아니다. 금융이자, 오입금 반환, 은행 수수료 환급은
+     * 본사가 받은 돈이다. 그 돈을 고객사 Wallet 에 줄 수는 없고, 반려로 두면 "모계좌가 들고 있는
+     * 돈" 으로만 세어져 본사 수익으로 인식되지 않는다.</p>
+     *
+     * <p><b>원장 대조식이 그대로 성립한다.</b> 본사 Wallet 도 {@code WALLET_BALANCE} 에 들어가므로
+     * 모계좌 잔액이 오른 만큼 Wallet 잔액 합계도 오른다. 반려나 잔액조정으로 흘리면 대조식에
+     * 설명 항목을 새로 더해야 한다.</p>
+     *
+     * <p>고객사 웹훅은 <b>보내지 않는다.</b> 받을 고객사가 없다. 거래 유형은 {@code 기타입금} 이고
+     * 분개의 비고에 운영자가 적은 사유가 남는다. 감사 이력의 업무 이름은 {@code DEPOSIT_ASSIGN_HQ} 다.</p>
+     */
+    public static SharedMap<String, Object> assignHq(SharedMap<String, Object> in) throws SQLException {
+
+        String id       = WxPostingRps.field(in, "depositId", 32);
+        String actor    = WxPostingRps.field(in, "userId", 24);
+        String reason   = WxPostingRps.field(in, "reason", 128);
+        String accessIp = in.getString("clientIp");
+
+        return transaction(db -> {
+            SharedMap<String, Object> deposit = locked(db, id);
+            long amount = deposit.getLong("amount");
+            if (amount <= 0) throw new LedgerEx(LedgerCode.INVALID, "입금액을 확인해 주세요.");
+
+            String hqId = deposit.getString("hqId");
+            SharedMap<String, Object> wallet = lockedHqWallet(db, hqId);
+            if (wallet == null) {
+                throw new LedgerEx(LedgerCode.NOT_FOUND, "이 모계좌의 본사 Wallet 을 찾을 수 없습니다.");
+            }
+
+            LocalDateTime postedAt = WxPostingRps.postingTime(db);
+            int    today  = WxPostingRps.businessDay(postedAt);
+            long   after  = Math.addExact(wallet.getLong("balance"), amount);
+            String ledgerId = creditHq(db, wallet, id, amount, deposit.getString("depositName"), reason,
+                    actor, postedAt, today);
+
+            changed(update(db, """
+                    UPDATE WX.TRX_DEPOSIT SET status='완료',mchtId=NULL,walletId=?,walletTrxId=?,matchedBy=?,
+                           matchedAt=NOW(),udtId=? WHERE id=? AND status IN ('접수','미매칭')
+                    """, wallet.getString("walletId"), ledgerId, actor, actor, id));
+
+            audit(db, "DEPOSIT_ASSIGN_HQ", null, id, reason, accessIp, actor, today,
+                    SharedMap.<String, Object>of().add("status", deposit.getString("status")),
+                    SharedMap.<String, Object>of().add("status", "완료").add("owner", "HQ")
+                            .add("walletId", wallet.getString("walletId"))
+                            .add("walletTrxId", ledgerId).add("amount", amount));
+
+            logger.info("본사 입금 반영: depositId={}, hqId={}, walletId={}, walletTrxId={}, amount={}, actor={}",
+                    id, hqId, wallet.getString("walletId"), ledgerId, amount, actor);
+            // 고객사 웹훅을 적재하지 않는다. 받을 고객사가 없다.
+            return SharedMap.<String, Object>of()
+                    .add("id", id)
+                    .add("owner", "HQ")
+                    .add("hqId", hqId)
+                    .add("walletId", wallet.getString("walletId"))
+                    .add("walletTrxId", ledgerId)
+                    .add("amount", amount)
+                    .add("balanceAfter", after)
+                    .add("status", "완료");
+        });
+    }
+
+    /**
+     * 그 모계좌의 본사 Wallet 을 잠그고 잔액을 읽는다.
+     *
+     * <p>모계좌마다 하나이고 {@code hqWalletHqId} 가 그 귀속을 가리킨다. 정산 수수료가 모이는 그
+     * Wallet 이며 본사가 받은 입금도 같은 자리로 간다.</p>
+     */
+    private static SharedMap<String, Object> lockedHqWallet(Connection db, String hqId) throws SQLException {
+
+        List<SharedMap<String, Object>> found = rows(db, """
+                SELECT W.id AS walletId,W.hqId,B.balance
+                  FROM WX.WALLET W JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
+                 WHERE W.hqWalletHqId=? AND W.ownerType='HQ' AND W.status='사용'
+                 FOR UPDATE
+                """, hqId);
+        return found.size() == 1 ? found.get(0) : null;
+    }
+
+    /**
+     * 본사 Wallet 입금 분개.
+     *
+     * <p>고객사 분개({@link #credit})와 다른 점은 셋이다 — {@code ownerType='HQ'}, 고객사 ID 가 없고,
+     * 거래 유형이 {@code 기타입금} 이다. 잔액은 {@code TR_TRX_WALLET_BALANCE_AI} 가 올린다.</p>
+     */
+    private static String creditHq(Connection db, SharedMap<String, Object> wallet, String depositId, long amount,
+                                    String depositName, String summary, String actor, LocalDateTime postedAt,
+                                    int today) throws SQLException {
+
+        String walletId = wallet.getString("walletId");
+        long   before   = wallet.getLong("balance");
+        long   after    = Math.addExact(before, amount);
+        long sequence = rows(db,
+                "SELECT COALESCE(MAX(`sequence`),0)+1 AS nextSequence FROM WX.TRX_WALLET WHERE walletId=?",
+                walletId).get(0).getLong("nextSequence");
+
+        String ledgerId = IDUtils.getUnique("T");
+        changed(update(db, """
+                INSERT INTO WX.TRX_WALLET(id,ownerType,walletId,hqId,refType,refId,refSeq,`sequence`,
+                                          trxType,dtlType,status,amount,depositAmt,withdrawnAmt,balance,balanceAfter,
+                                          sender,summary,trxDay,trxDate,regId,regDay)
+                VALUES(?,'HQ',?,?,'TRX_DEPOSIT',?,1,?,'입금','기타입금','성공',?,?,0,?,?,LEFT(?,24),?,?,?,?,?)
+                """, ledgerId, walletId, wallet.getString("hqId"), depositId, sequence,
+                amount, amount, before, after, depositName, summary, today, postedAt, actor, today));
+        return ledgerId;
     }
 
     /** 입금 반려: 매칭하지 않고 사유를 남겨 입금을 종결한다. 원장 분개는 없다. */

@@ -30,7 +30,7 @@ public final class RecoverySvc {
         this.ledger = ledger;
     }
 
-    /** 장애 큐에서 꺼낸 송금을 한 건씩 확인한다. 꺼낸 건은 어떤 경우에도 잃지 않는다. */
+    /** 원장에서 선점한 미결 송금을 한 건씩 확인한다. */
     public SharedMap<String, Object> recover(int limit, String trace) throws Exception {
 
         if (!WalletConfig.upstreamReady()) {
@@ -39,9 +39,14 @@ public final class RecoverySvc {
         }
 
         List<SharedMap<String, Object>> rows = ledger.pending(Math.min(Math.max(limit, 1), WalletPolicy.RECOVERY_LIMIT), trace);
+        SharedMap<String,Object> hq = counts(0,0,0);
+        try {
+            hq = new HqWithdrawSvc(ledger).recover(Math.min(Math.max(limit,1),WalletPolicy.RECOVERY_LIMIT));
+        } catch (RuntimeException failure) {
+            logger.error("본사 출금 재조회 목록 조회 실패: trace={}",trace,failure);
+        }
         if (rows.isEmpty()) {
-            logger.debug("송금 재조회 대상 없음: trace={}", trace);
-            return counts(0, 0, 0);
+            return hq;
         }
 
         int settled = 0;
@@ -52,15 +57,23 @@ public final class RecoverySvc {
                 if (resolve(row, trace)) settled++;
                 else requeued++;
             } catch (Exception failure) {
-                // 꺼낸 건을 잃지 않는다. 확정하지 못한 건은 반드시 큐로 돌려보낸다.
-                logger.error("송금 재조회 처리 실패, 재조회 대기로 돌린다: trxId={}, trace={}", trxId, trace, failure);
-                park(trxId, row.getInt("retry"), "재조회 처리 예외", trace);
+                logger.error("송금 재조회 처리 실패, 선점 만료 후 재시도: trxId={}, trace={}", trxId, trace, failure);
                 requeued++;
             }
         }
         logger.info("송금 재조회 결과: checked={}, settled={}, requeued={}, trace={}",
                 rows.size(), settled, requeued, trace);
-        return counts(rows.size(), settled, requeued);
+        return counts(rows.size()+hq.getInt("checked"), settled+hq.getInt("settled"), requeued+hq.getInt("requeued"));
+    }
+
+    /** 작업기 주기에 입금 이후 보류된 모계좌 한 건을 새로운 기관 잔액으로 대조한다. */
+    public SharedMap<String, Object> recoverBalance(String trace) throws Exception {
+
+        if (!"prod".equals(WalletConfig.upstreamEnv())) return counts(0, 0, 0);
+        SharedMap<String, Object> job = ledger.claimBalanceReview();
+        if (job == null) return counts(0, 0, 0);
+        boolean completed = DepositSvc.syncBankBalance(ledger, job, trace);
+        return counts(1, completed ? 1 : 0, completed ? 0 : 1);
     }
 
     /** 한 건의 기관 원거래 결과를 조회해 확정한다. 확정하지 못하면 재조회 대기로 돌린다. */
@@ -74,14 +87,12 @@ public final class RecoverySvc {
         } catch (Exception failure) {
             logger.warn("기관 원거래 조회 호출 실패: trxId={}, acqTrxId={}, trace={}",
                     trxId, acqTrxId, trace, failure);
-            park(trxId, row.getInt("retry"), "기관 조회 호출 실패", trace);
             return false;
         }
 
         if (unresolved(inquiry)) {
             logger.info("기관 원거래 결과 미확정: trxId={}, resultCd={}, acqResultCd={}, trace={}",
                     trxId, inquiry.getString("resultCd"), inquiry.getString("acqResultCd"), trace);
-            park(trxId, row.getInt("retry"), "기관 결과 미확정", trace);
             return false;
         }
 
@@ -92,39 +103,26 @@ public final class RecoverySvc {
                 .add("outcome", outcome)
                 .add("responseCode", inquiry.getString("resultCd"))
                 .add("responseMsg", inquiry.getString("resultMsg"))
-                .add("acqTrxId", inquiry.getString("acqTrxId", acqTrxId))
-                .add("acqTrxDate", inquiry.getString("acqTrxDate")), trace);
+                .add("acqTrxId", acqTrxId), trace);
         if (!settled.getBoolean("result")) {
             throw new IllegalStateException("송금 재조회 확정이 거절되었습니다. code=" + settled.getString("code"));
         }
         logger.info("송금 통신장애 확정: trxId={}, outcome={}, resultCd={}, acqTrxId={}, trace={}",
-                trxId, outcome, inquiry.getString("resultCd"), inquiry.getString("acqTrxId", acqTrxId), trace);
+                trxId, outcome, inquiry.getString("resultCd"), acqTrxId, trace);
         return true;
     }
 
     /**
      * 기관 조회 결과가 성공·실패로 확정되지 않았는지 본다.
      *
-     * <p>결과 코드가 비었거나 업무·기관 코드가 X로 시작하면 통신 구간에서 끝난 응답이다.
-     * 이때는 원거래 결과를 단정하지 않는다. OPL_TASK의 판정과 같다.</p>
+     * <p>기관 조회가 성공했고 원거래 결과 코드가 있는 응답만 확정에 사용한다.
+     * 미확정 응답은 다음 주기에 다시 확인한다.</p>
      */
     private static boolean unresolved(SharedMap<String, Object> inquiry) {
 
         String resultCd    = inquiry.getString("resultCd");
         String acqResultCd = inquiry.getString("acqResultCd");
-        return resultCd.isBlank() || resultCd.startsWith("X") || acqResultCd.startsWith("X");
-    }
-
-    /** 확정하지 못한 송금을 재조회 큐로 돌려보낸다. */
-    private void park(String trxId, int retry, String reason, String trace) {
-
-        try {
-            ledger.park(trxId, retry, reason, trace);
-        } catch (Exception failure) {
-            // 큐 복귀까지 실패하면 자동 해소 경로가 없다. 운영자가 미확정 목록에서 확인해야 한다.
-            logger.error("송금 재조회 대기 복귀 실패, 수동 확인 필요: trxId={}, reason={}, trace={}",
-                    trxId, reason, trace, failure);
-        }
+        return resultCd.isBlank() || resultCd.startsWith("X") || !WalletPolicy.SUCCEEDED.equals(acqResultCd);
     }
 
     /** 재조회 처리 건수를 WX_TASK가 읽을 형식으로 만든다. */

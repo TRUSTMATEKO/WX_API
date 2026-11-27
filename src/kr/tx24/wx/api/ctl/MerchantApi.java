@@ -84,7 +84,7 @@ public final class MerchantApi {
         SharedMap<String, Object> result = flowSvc.wallet(action, data.getString("authorization"),
                 data.getString("x-forwarded-for").strip(), data.getString("contentType"),
                 new ByteArrayInputStream(payload), trace);
-        return INetUtils.response(request, result);
+        return INetUtils.response(trace, result);
     }
 
     /** /api/v1/wallet: 프록시 연결과 메서드 오류는 게이트웨이 HTTP 오류 형식을 사용한다. */

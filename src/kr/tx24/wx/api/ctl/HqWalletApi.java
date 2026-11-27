@@ -75,14 +75,9 @@ public final class HqWalletApi {
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
-        if (!WalletConfig.internalReady()) {
-            return INetUtils.response(request,
-                    INetUtils.error("TX503", "Wallet 이전 경로가 설정되지 않았습니다."));
-        }
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
-            SharedMap<String, Object> input = INetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
+            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
             SharedMap<String, Object> data = "collect".equals(direction)

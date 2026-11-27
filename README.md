@@ -9,9 +9,9 @@ Java 17, Ant, TX24_LIB 및 INet을 사용한다.
 
 ## 연결 설정
 
-- `conf/inet.json`의 내부 경로는 `internal.allowedIps`와 `internal_api.key`로 받는다. WX_ADM·WX_TASK·입금 통지 시스템이 같은 키를 쓴다. 두 호출자는 이 `port`를 각자 `conf/nlb.json`의 `WX_API` 그룹에 둔다. Redis 주소는 실행 스크립트가 `-DREDIS`로 준다.
-- `host`, `port`, `gateway.allowedIps`는 TX24_HTTP 게이트웨이의 실제 연결 범위에 맞춘다. `env`는 `test` 또는 `prod`다. 둘 중 하나가 아니면 송금을 접수하지 않고 조회만 제공한다.
-- NGINX에서는 `proxy_set_header X-Forwarded-For $remote_addr;`로 값을 덮어쓰고 TX24_HTTP가 INet에 전달한다. TX24_HTTP 라우트가 authorization 헤더를 전달해야 한다. 이어진 IP 문자열은 거절한다. WX DB의 인증 키에 저장된 `MCHT_WALLET_API_KEY.ips`의 IPv4·IPv6 CIDR 규칙과 대조한다.
+- 시스템 설정의 내부 연동 허용 IP와 인증키는 WX.CONFIG에서 읽는다. WX_ADM·WX_TASK·입금 통지 송신자가 사용한다. 두 호출자는 이 `port`를 각자 `conf/nlb.json`의 `WX_API` 그룹에 둔다. Redis 주소는 실행 스크립트가 `-DREDIS`로 준다.
+- `host`와 `port`는 서버 설정이다. 게이트웨이 허용 IP와 기관 연동 환경(test/prod)은 WX_ADM 시스템 설정에서 관리한다. 둘 중 하나가 아니면 송금을 접수하지 않고 조회만 제공한다.
+- NGINX에서는 `proxy_set_header X-Forwarded-For $remote_addr;`로 값을 덮어쓰고 TX24_HTTP가 INet에 전달한다. TX24_HTTP 라우트가 authorization 헤더를 전달해야 한다. 이어진 IP 문자열은 거절한다. WX DB의 인증 키에 저장된 `WALLET_API_KEY.ips`의 IPv4·IPv6 CIDR 규칙과 대조한다.
 - 배포 전후 점검은 `java -DPROC=WX_API -DCONF=<conf> -cp WX_API.jar kr.tx24.wx.api.main.Launcher --check`로 한다. 수신 포트를 열지 않고 설정·원장 연결·업무 스키마만 확인한다.
 - `ai/tools/verify-isolated.ps1`은 일회성 포트·키로 WX_API·WX_TASK의 원장 연결을 검증한다. 수신부는 TX24_HTTP가 보내는 INet 경로 하나다.
 

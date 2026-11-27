@@ -9,6 +9,7 @@ import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.ctx.WalletContext;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
+import kr.tx24.wx.api.utils.NotificationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +37,7 @@ public final class TransferSvc {
     /** 송금: 접수와 선차감, 기관 전송, 결과 확정을 차례로 수행한다. */
     public SharedMap<String, Object> transfer(WalletContext etx) {
 
+        if (!WalletConfig.upstreamReady()) throw new WalletException("W003", "기관 환경을 확인해 주세요.");
         SharedMap<String, Object> accepted = accept(etx);
         String trxId  = accepted.getString("trxId");
         long   amount = accepted.getLong("amount");
@@ -54,7 +56,12 @@ public final class TransferSvc {
             logger.info("기관 송금 응답 수신: trxId={}, outcome={}, acqResultCd={}, acqTrxId={}, trace={}",
                     trxId, outcome, code, replied.getString("acqTrxId"), etx.getTrace());
         }
-        return finish(etx, trxId, outcome, replied, accepted);
+        SharedMap<String, Object> result = finish(etx, trxId, outcome, replied, accepted);
+        if (WalletPolicy.OUTCOME_UNKNOWN.equals(outcome)) {
+            NotificationUtils.incident("TRX_TRANSFER", trxId,
+                    "[WX] 송금 기관 응답 미확인. 거래번호 " + trxId + ". 송금내역에서 확인해 주세요.");
+        }
+        return result;
     }
 
     /**

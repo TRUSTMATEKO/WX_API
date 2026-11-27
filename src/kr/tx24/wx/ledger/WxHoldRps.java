@@ -26,6 +26,9 @@ import static kr.tx24.wx.ledger.WxDatabaseRps.update;
  * 본사 화면이 직접 바꾸면 접수와 보류가 서로 다른 잠금 순서로 같은 행을 건드린다. 송금 접수와
  * 같은 프로세스에서 같은 순서로 잠가야 교착과 경합을 피할 수 있다.</p>
  *
+ * <p>변경 이력은 {@code WALLET_HOLD}에 남기고 그 번호는 거래번호와 같은 방식으로 만든다. 송금 {@code S},
+ * 원장 {@code T} 처럼 보류는 {@code H} 로 시작한다. 운영자가 번호만 보고 무엇인지 알 수 있어야 한다.</p>
+ *
  * <p>변경 이력은 {@code WALLET_HOLD}에 남긴다. 일별 마감이 그 시점의 {@code afterAmt}를 읽어
  * 집계에 넣으므로, 이력은 추가 전용이고 지우지 않는다.</p>
  */
@@ -104,7 +107,7 @@ public final class WxHoldRps {
         update(db, """
                 INSERT INTO WX.WALLET_HOLD(id,mchtId,walletId,beforeAmt,afterAmt,reason,regId,regDay,regDate)
                 VALUES(?,?,?,?,?,?,?,?,?)
-                """, IDUtils.getRandom(32), wallet.getString("mchtId"), walletId, before, target, reason,
+                """, IDUtils.getUnique("H"), wallet.getString("mchtId"), walletId, before, target, reason,
                 actor, WxPostingRps.businessDay(now), now);
 
         // 자금 처리와 같은 형식으로 변경 전후와 접속 IP 를 남긴다.

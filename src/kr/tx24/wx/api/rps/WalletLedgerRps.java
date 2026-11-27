@@ -7,6 +7,7 @@ import kr.tx24.wx.ledger.WxDepositRps;
 import kr.tx24.wx.ledger.WxHealthRps;
 import kr.tx24.wx.ledger.WxHoldRps;
 import kr.tx24.wx.ledger.WxHolderRps;
+import kr.tx24.wx.ledger.WxInvoiceRps;
 import kr.tx24.wx.ledger.WxMerchantRps;
 import kr.tx24.wx.ledger.WxTransferRps;
 import kr.tx24.wx.ledger.WxWalletMoveRps;
@@ -33,6 +34,14 @@ import java.util.List;
 public final class WalletLedgerRps {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletLedgerRps.class);
+
+    private final HqWithdrawRps withdrawals = new HqWithdrawRps();
+
+    /** 지정 계좌 출금의 접수·확정·재조회 저장소. */
+    public HqWithdrawRps withdrawals() {
+
+        return withdrawals;
+    }
 
     /** 인증: 키 해시와 접속 IP로 키에 연결된 Wallet을 확인한다. */
     public SharedMap<String, Object> authorize(String keyHash, String clientIp, String trace) {
@@ -118,12 +127,6 @@ public final class WalletLedgerRps {
         return WxTransferRps.pending(limit);
     }
 
-    /** 확정하지 못한 송금을 재조회 큐로 돌려보낸다. */
-    public void park(String trxId, int retry, String reason, String trace) throws Exception {
-
-        WxTransferRps.requeue(trxId, retry, reason);
-    }
-
     /**
      * 예금주 조회 접수: 요청을 기록하고 기관 조회 프로필을 돌려준다.
      *
@@ -179,15 +182,40 @@ public final class WalletLedgerRps {
         return ledger("deposit/receive", trace, () -> WxDepositRps.receive(input));
     }
     /** 모계좌 잔액 동기화: 기관이 알려준 실제 잔액으로 장부잔액을 맞춘다. */
-    public SharedMap<String, Object> syncBankBalance(String hqId, String depositId, long reported, String trace) {
+    public long bankBalanceRevision(String hqId) throws java.sql.SQLException {
 
-        return ledger("deposit/balance", trace, () -> WxDepositRps.syncBalance(hqId, depositId, reported));
+        return WxDepositRps.balanceRevision(hqId);
+    }
+
+    /** 작업기가 재조회할 모계좌 한 건을 선점한다. */
+    public SharedMap<String, Object> claimBalanceReview() throws java.sql.SQLException {
+
+        return WxDepositRps.claimBalanceReview();
+    }
+
+    /** 입금 잔액 대조: 기관 조회 당시 원장 순번이 유지된 경우에만 반영한다. */
+    public SharedMap<String, Object> syncBankBalance(SharedMap<String, Object> job, long reported, long revision,
+                                                      String trace) {
+
+        return ledger("deposit/balance", trace, () -> WxDepositRps.syncBalance(job, reported, revision));
     }
 
     /** 본사 입금 지정: 미매칭 입금을 지정 Wallet의 확정 원장에 입금으로 반영한다. */
     public SharedMap<String, Object> assignDeposit(SharedMap<String, Object> input, String trace) {
 
         return ledger("deposit/assign", trace, () -> WxDepositRps.assign(input));
+    }
+
+    /** 본사 수동 입금: 통지가 오지 않은 입금을 기록하고 고른 Wallet 에 반영한다. */
+    public SharedMap<String, Object> manualDeposit(SharedMap<String, Object> input, String trace) {
+
+        return ledger("deposit/manual", trace, () -> WxDepositRps.manual(input));
+    }
+
+    /** 본사 입금: 미매칭 입금을 그 모계좌의 본사 Wallet 에 반영한다(이자·환급 등). */
+    public SharedMap<String, Object> assignHqDeposit(SharedMap<String, Object> input, String trace) {
+
+        return ledger("deposit/assign-hq", trace, () -> WxDepositRps.assignHq(input));
     }
 
     /** 본사 입금 반려: 매칭하지 않고 사유를 남겨 입금을 종결한다. */
@@ -206,7 +234,13 @@ public final class WalletLedgerRps {
         return ledger("wallet/hold", trace, () -> WxHoldRps.apply(input));
     }
 
-    /** 웹훅 재발송: 실패로 확정된 발송을 다시 대기로 돌린다. */
+    /** 본사 월 청구: 대기 청구서를 청구로 바꾸고 청구일을 기록한다. */
+    public SharedMap<String, Object> billInvoice(SharedMap<String, Object> input, String trace) {
+
+        return ledger("invoice/bill", trace, () -> WxInvoiceRps.bill(input));
+    }
+
+    /** 웹훅 재발송: 대기 상태를 제외한 발송을 다시 대기로 돌린다. */
     public SharedMap<String, Object> webhookRetry(SharedMap<String, Object> input, String trace) {
 
         return ledger("webhook/retry", trace, () -> SharedMap.<String, Object>of()

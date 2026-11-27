@@ -48,7 +48,7 @@
                 "properties": {
                   "trackId": {
                     "type": "string",
-                    "description": "가맹점 고객 요청번호",
+                    "description": "고객사 주문번호",
                     "maxLength": 64
                   },
                   "bankCd": {
@@ -125,7 +125,7 @@
                 "properties": {
                   "trackId": {
                     "type": "string",
-                    "description": "가맹점 고객 요청번호",
+                    "description": "고객사 주문번호",
                     "maxLength": 64
                   },
                   "bankCd": {
@@ -276,7 +276,7 @@
                 "properties": {
                   "trackId": {
                     "type": "string",
-                    "description": "가맹점 고객 요청번호",
+                    "description": "고객사 주문번호",
                     "maxLength": 64
                   },
                   "trxDay": {
@@ -369,7 +369,7 @@
           },
           "trackId": {
             "type": "string",
-            "description": "고객사 요청번호"
+            "description": "고객사 주문번호"
           },
           "status": {
             "type": "string",
@@ -475,7 +475,7 @@
           },
           "trackId": {
             "type": "string",
-            "description": "송금에만 있다. 고객사 요청번호."
+            "description": "송금에만 있다. 고객사 주문번호."
           },
           "acqTrxId": {
             "type": "string",

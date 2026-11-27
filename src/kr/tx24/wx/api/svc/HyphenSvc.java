@@ -7,6 +7,7 @@ import kr.tx24.lib.inter.INet;
 import kr.tx24.lib.lang.MaskUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletPolicy;
+import kr.tx24.wx.api.utils.NotificationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,7 +107,7 @@ public final class HyphenSvc {
      * 처리했는지를 알 수 없어 잔액도 확정된 값이 아니므로 보지 않는다. 기준 금액은 모계좌에 등록한
      * {@code HQ_ACCNT.alarmBalance}이고 전송 프로필로 함께 받는다.</p>
      *
-     * <p>경고만 남기고 이번 지급은 그대로 끝낸다. 전문은 이미 기관이 처리했고, 다음 지급을 받을지는
+     * <p>경고와 SMS 발송을 처리하고 이번 지급은 그대로 끝낸다. 다음 지급을 받을지는
      * 원장이 모계좌 지급 가능액으로 판정한다. 로그에는 모계좌 계좌번호 원문을 남기지 않는다.</p>
      */
     private SharedMap<String, Object> warnLowBalance(SharedMap<String, Object> replied) {
@@ -116,10 +117,11 @@ public final class HyphenSvc {
         }
         long balance = replied.getLong("balance");
         long alarm   = profile.getLong("alarmBalance", 0L);
-        if (balance <= alarm) {
+        if (alarm > 0 && balance <= alarm) {
             logger.warn("모계좌 잔액이 알림 기준 이하입니다, 입금이 필요합니다: hqId={}, 은행코드={}, 계좌={}, 잔액={}원, 알림기준={}원",
                     profile.getString("hqId"), profile.getString("acqBankCd"),
                     MaskUtils.account(profile.getString("acqAccount")), balance, alarm);
+            NotificationUtils.lowBalance(profile.getString("hqId"), balance, alarm);
         }
         return replied;
     }

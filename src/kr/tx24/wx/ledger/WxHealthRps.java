@@ -32,8 +32,9 @@ public final class WxHealthRps {
     public static void api() throws SQLException {
 
         verify("""
-                SELECT k.idx,k.ips,w.ownerType,b.available,c.firmStopStart,c.firmStopEnd,t.udtDate,h.accntNo
-                FROM WX.MCHT_WALLET_API_KEY k,WX.WALLET w,WX.WALLET_BALANCE b,WX.CONFIG c,WX.TRX_TRANSFER t,WX.TRX_HOLDER h LIMIT 0
+                SELECT k.idx,p.ip,w.ownerType,b.available,c.firmStopStart,c.firmStopEnd,t.udtDate,h.accntNo
+                FROM WX.WALLET_API_KEY k,WX.WALLET_API_IPS p,WX.WALLET w,WX.WALLET_BALANCE b,WX.CONFIG c,
+                     WX.TRX_TRANSFER t,WX.TRX_HOLDER h LIMIT 0
                 """);
     }
 

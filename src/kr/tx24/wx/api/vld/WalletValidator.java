@@ -76,7 +76,7 @@ public final class WalletValidator {
 
         if (action.equals("balance")) return SharedMap.of();
 
-        // 거래조회는 두 가지 중 하나를 받는다. WX 거래번호 하나로 찾거나, 고객사 요청번호와 거래일로 찾는다.
+        // 거래조회는 두 가지 중 하나를 받는다. WX 거래번호 하나로 찾거나, 고객사 주문번호와 거래일로 찾는다.
         if (action.equals("inquiry")) return inquiry(payload);
 
         if (!Set.of("payout", "holder").contains(action)) throw new IllegalArgumentException();

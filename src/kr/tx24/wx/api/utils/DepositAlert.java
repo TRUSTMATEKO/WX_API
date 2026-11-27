@@ -2,12 +2,7 @@ package kr.tx24.wx.api.utils;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 
-import kr.tx24.lib.lang.SystemUtils;
-import kr.tx24.lib.redis.RedisUtils;
-import kr.tx24.lib.shared.Sms;
-import kr.tx24.wx.api.WalletConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,31 +45,9 @@ public final class DepositAlert {
     public static void mismatch(String depositId, String sourceType, String depositName, String occurredAt,
                                  long amount, String trace) {
 
-        List<String> receivers = WalletConfig.alertReceivers();
-        logger.warn("입금자명 확인 불일치, 미매칭으로 두었다. 본사 입금 화면에서 Wallet 을 지정해야 한다: "
-                        + "depositId={}, 경로={}, 입금자명={}, 입금시각={}, 금액={}원, 수신자={}명, trace={}",
-                depositId, sourceType, depositName, occurredAt, amount, receivers.size(), trace);
-        if (receivers.isEmpty()) {
-            logger.warn("미매칭 알림 수신자(alert.receiver)가 없어 SMS 를 보내지 않는다: depositId={}", depositId);
-            return;
-        }
-        try {
-            Sms sms = new Sms();
-            sms.system = "default";
-            sms.table = "TRX_DEPOSIT";
-            sms.id = depositId;
-            sms.message = message(depositId, sourceType, depositName, occurredAt, amount);
-            sms.receiver.addAll(receivers);
-            Long size = RedisUtils.lpush(SystemUtils.REDIS_STORAGE_MESSAGE, sms);
-            if (size == null || size <= 0L) {
-                logger.warn("미매칭 알림을 메시지 큐가 받지 않았다: depositId={}", depositId);
-                return;
-            }
-            logger.info("미매칭 알림 발송 요청: depositId={}, 수신자={}명", depositId, receivers.size());
-        } catch (RuntimeException failure) {
-            // 알림 실패로 입금 기록을 되돌리지 않는다. 미매칭 목록과 로그에 건은 그대로 남는다.
-            logger.warn("미매칭 알림 발송 실패: depositId={}, type={}", depositId, failure.getClass().getSimpleName());
-        }
+        logger.warn("입금자명 확인 불일치, 미매칭으로 두었다: depositId={}, 경로={}, 입금시각={}, 금액={}원, trace={}",
+                depositId, sourceType, occurredAt, amount, trace);
+        NotificationUtils.incident("TRX_DEPOSIT", depositId, message(depositId, sourceType, depositName, occurredAt, amount));
     }
 
     /** 운영자가 건을 바로 찾을 수 있는 짧은 문구. 계좌번호는 넣지 않는다. */

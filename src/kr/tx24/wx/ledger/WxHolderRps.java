@@ -6,7 +6,6 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.Set;
 
-import kr.tx24.lib.kms.KMSUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import org.slf4j.Logger;
@@ -97,7 +96,7 @@ public final class WxHolderRps {
                                           accntNo,accntNoEnc,status,feeAmt,feeRateIdx,feeTarget,regId,regDay,regDate)
                 VALUES(?,?,?,?,?,?,?,?,?,?,'접수',?,?,0,'WX_API',?,?)
                 """, trxId, company, walletId, in.getString("ioId"), track, in.getString("requestHash"),
-                bankCd, bankName(db, bankCd), masked, KMSUtils.encrypt(accntNo),
+                bankCd, bankName(db, bankCd), masked, WxPostingRps.encryptForLedger(accntNo),
                 charge, rate.get("feeRateIdx"), day, now);
 
         logger.info("예금주 조회 접수: trxId={}, mchtId={}, walletId={}, bankCd={}, feeAmt={}",
@@ -117,7 +116,7 @@ public final class WxHolderRps {
     /**
      * 예금주 조회 결과 확정.
      *
-     * <p>성공만 과금 대상으로 둔다. 실패와 불일치는 기관에 물었어도 과금하지 않는다.
+     * <p>수수료가 있는 성공·불일치 결과를 과금 대상으로 둔다.
      * 자금이 움직이지 않으므로 원장과 잔액은 손대지 않는다.</p>
      */
     public static SharedMap<String, Object> confirm(SharedMap<String, Object> in) throws SQLException {
@@ -141,7 +140,7 @@ public final class WxHolderRps {
                 }
                 int changed = update(db, """
                         UPDATE WX.TRX_HOLDER SET status=?,responseCode=?,
-                               feeTarget=CASE WHEN ?='성공' AND feeAmt>0 THEN 1 ELSE 0 END,udtDate=NOW()
+                               feeTarget=CASE WHEN ? IN ('성공','불일치') AND feeAmt>0 THEN 1 ELSE 0 END,udtDate=NOW()
                          WHERE trxId=? AND status='접수'
                         """, outcome, in.getString("responseCode"), outcome, trxId);
                 if (changed != 1) throw new SQLException("예금주 조회 결과 확정에 실패했습니다.");
@@ -168,7 +167,7 @@ public final class WxHolderRps {
                 """, company, day);
         if (applied.isEmpty()) {
             logger.debug("적용 수수료 계약 없음: mchtId={}, baseDay={}", company, day);
-            return SharedMap.<String, Object>of().add("feeAmt", 0L).add("feeRateIdx", null);
+            return SharedMap.<String, Object>of().add("feeAmt", 0L);
         }
         return SharedMap.<String, Object>of()
                 .add("feeAmt", applied.get(0).getLong("holderUnitAmt"))

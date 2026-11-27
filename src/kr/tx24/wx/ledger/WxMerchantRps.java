@@ -66,8 +66,8 @@ public final class WxMerchantRps {
         }
 
         List<SharedMap<String, Object>> keys = rows(db, """
-                SELECT K.idx,K.mchtId,K.walletId,K.ips
-                  FROM WX.MCHT_WALLET_API_KEY K JOIN WX.MCHT M ON M.mchtId=K.mchtId
+                SELECT K.idx,K.mchtId,K.walletId
+                  FROM WX.WALLET_API_KEY K JOIN WX.MCHT M ON M.mchtId=K.mchtId
                  WHERE K.keyHash=? AND K.status='사용' AND M.status='사용'
                    AND (K.expiresAt IS NULL OR K.expiresAt>NOW()) AND K.revokedAt IS NULL
                 """, keyHash);
@@ -81,10 +81,16 @@ public final class WxMerchantRps {
         SharedMap<String, Object> key = keys.get(0);
         String company  = key.getString("mchtId");
         byte[] clientIp = LedgerIp.address(in.getString("clientIp"));
-        if (clientIp == null || java.util.Arrays.stream(key.getString("ips").split(","))
-                .noneMatch(rule -> !rule.isBlank() && LedgerIp.matches(clientIp, rule))) {
-            logger.warn("허용 IP가 아니어서 거절: mchtId={}, walletId={}, operation={}, clientIp={}",
-                    company, key.getString("walletId"), in.getString("operation"), in.getString("clientIp"));
+        // 허용 IP는 키가 아니라 Wallet 의 설정이다. 키를 재발급해도 이 목록이 그대로 쓰인다.
+        List<SharedMap<String, Object>> allowed = rows(db, """
+                SELECT ip FROM WX.WALLET_API_IPS WHERE walletId=? AND status='사용'
+                """, key.getString("walletId"));
+        if (clientIp == null || allowed.isEmpty()
+                || allowed.stream().map(row -> row.getString("ip"))
+                        .noneMatch(rule -> !rule.isBlank() && LedgerIp.matches(clientIp, rule))) {
+            logger.warn("허용 IP가 아니어서 거절: mchtId={}, walletId={}, operation={}, clientIp={}, 등록={}건",
+                    company, key.getString("walletId"), in.getString("operation"),
+                    in.getString("clientIp"), allowed.size());
             throw new LedgerEx(LedgerCode.FORBIDDEN);
         }
 
@@ -138,12 +144,12 @@ public final class WxMerchantRps {
                         || !in.getString("requestHash").matches("[a-f0-9]{64}")) {
                     throw new LedgerEx(LedgerCode.INVALID);
                 }
-                count=WxDatabaseRps.update(db,"INSERT INTO WX.MCHT_IO(id,mchtId,walletId,apiCode,apiKeyIdx,requestHash,regId,regDay)"
+                count=WxDatabaseRps.update(db,"INSERT INTO WX.TRX_IO(id,mchtId,walletId,apiCode,apiKeyIdx,requestHash,regId,regDay)"
                         +" SELECT ?,k.mchtId,k.walletId,?,k.idx,?,'WX_API',DATE_FORMAT(CURRENT_DATE(),'%Y%m%d')"
-                        +" FROM WX.MCHT_WALLET_API_KEY k WHERE k.keyHash=? AND k.walletId=? AND k.status='사용' AND k.revokedAt IS NULL AND (k.expiresAt IS NULL OR k.expiresAt>NOW())",
+                        +" FROM WX.WALLET_API_KEY k WHERE k.keyHash=? AND k.walletId=? AND k.status='사용' AND k.revokedAt IS NULL AND (k.expiresAt IS NULL OR k.expiresAt>NOW())",
                         id,in.getString("apiCode"),in.getString("requestHash"),in.getString("keyHash"),in.getString("walletId"));
             } else if (in.isEquals("phase","completed") && in.getString("resultCd").matches("[A-Z0-9]{4}") && in.getString("trackId").length()<=128) {
-                count=WxDatabaseRps.update(db,"UPDATE WX.MCHT_IO i JOIN WX.MCHT_WALLET_API_KEY k ON k.idx=i.apiKeyIdx"
+                count=WxDatabaseRps.update(db,"UPDATE WX.TRX_IO i JOIN WX.WALLET_API_KEY k ON k.idx=i.apiKeyIdx"
                         +" SET i.status='완료',i.udtDate=NOW(),i.resultCd=?,i.httpStatus=200,i.trackId=NULLIF(?,'')"
                         +" WHERE i.id=? AND i.walletId=? AND k.keyHash=? AND i.status='접수'",
                         in.getString("resultCd"),in.getString("trackId"),id,in.getString("walletId"),in.getString("keyHash"));
@@ -151,6 +157,7 @@ public final class WxMerchantRps {
                 throw new LedgerEx(LedgerCode.INVALID);
             }
             if (count!=1) throw new LedgerEx(LedgerCode.CONFLICT);
+            if (!db.getAutoCommit()) db.commit();
         }
     }
 
@@ -158,7 +165,7 @@ public final class WxMerchantRps {
      * 송금 결과 조회.
      *
      * <p>거래를 가리키는 방법은 두 가지다. WX 거래번호 {@code trxId} 하나로 찾거나,
-     * 고객사 요청번호 {@code trackId}와 거래일 {@code trxDay} 한 쌍으로 찾는다. 두 길 모두
+     * 고객사 주문번호 {@code trackId}와 거래일 {@code trxDay} 한 쌍으로 찾는다. 두 길 모두
      * 인증된 Wallet 범위 안에서만 찾으므로 다른 고객사의 거래가 나오지 않는다.</p>
      *
      * <p>날짜는 접수일과 완료일 둘 다 맞춘다. 응답이 유실된 고객사는 완료일을 모르기 때문이다.</p>

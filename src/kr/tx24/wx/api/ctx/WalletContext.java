@@ -102,7 +102,7 @@ public final class WalletContext {
         this.input = input;
     }
 
-    /** API 요청 이력(`MCHT_IO`) 기록 값. `ioId`와 `requestHash`를 담는다. */
+    /** API 요청 이력(`TRX_IO`) 기록 값. `ioId`와 `requestHash`를 담는다. */
     public SharedMap<String, Object> getIo() {
 
         return io;

@@ -2,7 +2,8 @@ package kr.tx24.wx.api.main;
 
 import kr.tx24.inet.conf.INetConfigLoader;
 import kr.tx24.lib.lang.SystemUtils;
-import kr.tx24.wx.api.WalletConfig;
+import kr.tx24.lib.map.SharedMap;
+import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.wx.api.WalletZone;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
 
@@ -12,7 +13,7 @@ import java.nio.file.Files;
  * 설정과 원장 연결을 확인하는 진단 도구다.
  *
  * <p>운영 기동에는 쓰지 않는다. WX_API 는 OPL_API 와 같이 범용
- * {@code kr.tx24.inet.server.INetServer} 로 뜨고, 업무 설정은 {@link WalletConfig} 가
+ * {@code kr.tx24.inet.server.INetServer} 로 뜨고, 업무 설정은 {@code WalletConfig} 가
  * 컨트롤러 적재 시점에 읽는다. 이 클래스는 배포 전후에 사람이 직접 부르는 점검 경로다.</p>
  *
  * <pre>java -DPROC=WX_API -DCONF=&lt;conf&gt; -cp WX_API.jar kr.tx24.wx.api.main.Launcher --check</pre>
@@ -42,8 +43,9 @@ public final class Launcher {
         System.setProperty("PROC", "WX_API");
         INetConfigLoader.start();
 
-        // 설정을 읽고(정적 초기화) 기동 로그와 같은 경고를 그대로 남긴다.
-        if (!WalletConfig.enabled()) throw new IllegalStateException("WX_API가 비활성입니다.");
+        // 진단은 예정 기관 환경을 적용하지 않고 서버 활성 설정만 읽는다.
+        SharedMap<String, Object> config = INetConfigLoader.getMap("property", TypeRegistry.MAP_SHAREDMAP_OBJECT);
+        if (config == null || !config.getBoolean("enabled")) throw new IllegalStateException("WX_API가 비활성입니다.");
         int port = INetConfigLoader.getPort();
         if (port < 1 || port > 65535) throw new IllegalStateException("WX_API INet 포트를 확인하세요.");
 

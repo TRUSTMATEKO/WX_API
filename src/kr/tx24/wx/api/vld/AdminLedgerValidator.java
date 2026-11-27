@@ -16,6 +16,12 @@ public final class AdminLedgerValidator {
     /** 운영자가 종결할 수 있는 결과. 미확인으로는 종결하지 않는다. 그것은 지금 상태다. */
     private static final Set<String> OUTCOME = Set.of("성공", "실패");
 
+    /** 수동 입금이 받는 수신경로. 통지가 쓰는 값과 같다. */
+    private static final Set<String> SOURCE_TYPES = Set.of("va", "sms");
+
+    /** 한 건의 금액 상한. 본사 화면이 실수로 큰 값을 보내는 것을 수신 쪽에서도 막는다. */
+    private static final long AMOUNT_MAX = 1_000_000_000L;
+
     /**
      * 미확정 송금의 운영자 종결 요청을 검증한다.
      *
@@ -45,6 +51,68 @@ public final class AdminLedgerValidator {
         return SharedMap.<String, Object>of()
                 .add("depositId", text(in, "depositId", 32))
                 .add("walletId", text(in, "walletId", 32))
+                .add("userId", text(in, "userId", 24))
+                .add("reason", text(in, "reason", 128));
+    }
+
+    /**
+     * 수동 입금 요청을 검증한다.
+     *
+     * <p>통지가 오지 않은 입금을 운영자가 넣는다. Wallet 을 사람이 고르므로 계좌번호는 받지 않고
+     * 그 Wallet 의 귀속에서 원장이 세운다. 받는 것은 어디에 얼마가 언제 누구 이름으로 들어왔는지
+     * 다섯 값이다.</p>
+     */
+    public SharedMap<String, Object> manual(SharedMap<String, Object> in) {
+
+        long amount = in.getLong("amount");
+        if (amount <= 0 || amount > AMOUNT_MAX) throw new WalletException("W001", "입금액을 확인해 주세요.");
+        String sourceType = text(in, "sourceType", 12);
+        if (!SOURCE_TYPES.contains(sourceType)) {
+            throw new WalletException("W001", "수신경로를 확인해 주세요.");
+        }
+        String occurredAt = text(in, "occurredAt", 14);
+        if (!occurredAt.matches("[0-9]{14}")) {
+            throw new WalletException("W001", "입금시간을 확인해 주세요.");
+        }
+        return SharedMap.<String, Object>of()
+                .add("walletId", text(in, "walletId", 32))
+                .add("sourceType", sourceType)
+                .add("depositName", text(in, "depositName", 128))
+                .add("occurredAt", occurredAt)
+                .add("amount", amount)
+                .add("userId", text(in, "userId", 24))
+                .add("reason", text(in, "reason", 128));
+    }
+
+    /**
+     * 월 청구 처리 요청을 검증한다.
+     *
+     * <p>금액은 받지 않는다. 바뀌는 것은 상태와 청구일뿐이다. 청구일은 세금계산서 발행일에 맞출 수
+     * 있어 오늘이 아닌 날도 받되 모양만 본다.</p>
+     */
+    public SharedMap<String, Object> bill(SharedMap<String, Object> in) {
+
+        int billDay = in.getInt("billDay");
+        if (billDay < 19000101 || billDay > 99991231) {
+            throw new WalletException("W001", "청구일을 확인해 주세요.");
+        }
+        return SharedMap.<String, Object>of()
+                .add("invoiceId", text(in, "invoiceId", 64))
+                .add("billDay", billDay)
+                .add("userId", text(in, "userId", 24))
+                .add("reason", text(in, "reason", 128));
+    }
+
+    /**
+     * 본사 입금 요청을 검증한다.
+     *
+     * <p>Wallet 을 받지 않는다. 어느 모계좌의 본사 Wallet 인지는 입금 기록이 알려 주므로 화면이
+     * 고를 것이 없다. 잘못된 Wallet 을 받을 여지도 없앤다.</p>
+     */
+    public SharedMap<String, Object> assignHq(SharedMap<String, Object> in) {
+
+        return SharedMap.<String, Object>of()
+                .add("depositId", text(in, "depositId", 32))
                 .add("userId", text(in, "userId", 24))
                 .add("reason", text(in, "reason", 128));
     }

@@ -40,14 +40,24 @@ public final class TransferApi {
     @Route(target = {"/recovery"}, loggable = false)
     public INet recovery() {
 
-        if (!WalletConfig.internalReady()) {
-            return INetUtils.response(request,
-                    INetUtils.error("TX503", "송금 재조회 경로가 설정되지 않았습니다."));
-        }
+        return recover(false);
+    }
+
+    /** /api/internal/transfer/balance-recovery: 보류된 모계좌 잔액을 기관에 재조회한다. */
+    @Route(target = {"/balance-recovery"}, loggable = false)
+    public INet recoverBalance() {
+
+        return recover(true);
+    }
+
+    /** 송금 및 잔액 재조회 요청의 내부 인증과 응답 형식을 공유한다. */
+    private INet recover(boolean balance) {
+
         try {
-            SharedMap<String, Object> input = INetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
-            SharedMap<String, Object> data = recoverySvc.recover(input.getInt("limit"), request.data().getString("x-trace-id"));
+            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
+            String trace = request.data().getString("x-trace-id");
+            SharedMap<String, Object> data = balance ? recoverySvc.recoverBalance(trace)
+                    : recoverySvc.recover(input.getInt("limit"), trace);
             return INetUtils.response(request, SharedMap.<String, Object>of()
                     .add("result", true)
                     .add("data", data));

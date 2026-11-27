@@ -26,9 +26,12 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code /api/internal/ledger/transfer/settle} — 미확정 송금의 운영자 종결</li>
  *   <li>{@code /api/internal/ledger/deposit/assign} — 미매칭 입금의 Wallet 지정</li>
+ *   <li>{@code /api/internal/ledger/deposit/manual} — 통지가 오지 않은 입금의 수동 기록</li>
+ *   <li>{@code /api/internal/ledger/deposit/assign-hq} — 미매칭 입금의 본사 Wallet 반영</li>
  *   <li>{@code /api/internal/ledger/deposit/reject} — 미매칭 입금의 반려 종결</li>
+ *   <li>{@code /api/internal/ledger/invoice/bill} — 대기 월 청구서의 청구 처리</li>
  *   <li>{@code /api/internal/ledger/wallet/hold} — 고객사 Wallet 의 자금 보류 설정·해제</li>
- *   <li>{@code /api/internal/ledger/webhook/retry} — 실패로 확정된 웹훅의 재발송</li>
+ *   <li>{@code /api/internal/ledger/webhook/retry} — 대기 상태를 제외한 웹훅의 재발송</li>
  * </ul>
  *
  * <p>Wallet 사이의 금액 이전은 {@link HqWalletApi}가 담당한다. 두 경로 모두 {@code internal_api.key}를 쓴다.</p>
@@ -41,14 +44,24 @@ public final class AdminLedgerApi {
     private final ChannelHandlerContext channel;
     private final INet request;
     private final AdminLedgerSvc adminLedgerSvc;
+    private final kr.tx24.wx.api.svc.HqWithdrawSvc withdrawals;
 
     /** /api/internal/ledger: 실제 채널과 원요청, 원장 변경 업무를 주입받는다. */
     @Autowired
-    public AdminLedgerApi(ChannelHandlerContext channel, INet request, AdminLedgerSvc adminLedgerSvc) {
+    public AdminLedgerApi(ChannelHandlerContext channel, INet request, AdminLedgerSvc adminLedgerSvc,
+                          kr.tx24.wx.api.svc.HqWithdrawSvc withdrawals) {
 
         this.channel = channel;
         this.request = request;
         this.adminLedgerSvc = adminLedgerSvc;
+        this.withdrawals = withdrawals;
+    }
+
+    /** /api/internal/ledger/hq-withdraw: 지정 계좌 본사 출금을 접수한다. */
+    @Route(target = {"/hq-withdraw"}, loggable = false)
+    public INet withdraw() {
+
+        return submit("hq-withdraw");
     }
 
     /** /api/internal/ledger/transfer/settle: 미확정 송금을 운영자 근거로 종결한다. */
@@ -65,11 +78,32 @@ public final class AdminLedgerApi {
         return submit("deposit/assign");
     }
 
+    /** /api/internal/ledger/deposit/manual: 통지가 오지 않은 입금을 기록하고 Wallet 에 반영한다. */
+    @Route(target = {"/deposit/manual"}, loggable = false)
+    public INet depositManual() {
+
+        return submit("deposit/manual");
+    }
+
+    /** /api/internal/ledger/deposit/assign-hq: 미매칭 입금을 그 모계좌의 본사 Wallet 에 반영한다. */
+    @Route(target = {"/deposit/assign-hq"}, loggable = false)
+    public INet depositAssignHq() {
+
+        return submit("deposit/assign-hq");
+    }
+
     /** /api/internal/ledger/deposit/reject: 미매칭 입금을 반려로 종결한다. */
     @Route(target = {"/deposit/reject"}, loggable = false)
     public INet depositReject() {
 
         return submit("deposit/reject");
+    }
+
+    /** /api/internal/ledger/invoice/bill: 대기 월 청구서를 청구로 바꾸고 청구일을 기록한다. */
+    @Route(target = {"/invoice/bill"}, loggable = false)
+    public INet invoiceBill() {
+
+        return submit("invoice/bill");
     }
 
     /** /api/internal/ledger/wallet/hold: 고객사 Wallet 의 보류 금액을 지정한 값으로 바꾼다. */
@@ -79,7 +113,7 @@ public final class AdminLedgerApi {
         return submit("wallet/hold");
     }
 
-    /** /api/internal/ledger/webhook/retry: 실패로 확정된 웹훅을 다시 발송 대기로 돌린다. */
+    /** /api/internal/ledger/webhook/retry: 대기 상태를 제외한 웹훅을 다시 발송 대기로 돌린다. */
     @Route(target = {"/webhook/retry"}, loggable = false)
     public INet webhookRetry() {
 
@@ -96,20 +130,19 @@ public final class AdminLedgerApi {
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
-        if (!WalletConfig.internalReady()) {
-            return INetUtils.response(request,
-                    INetUtils.error("TX503", "본사 원장 변경 경로가 설정되지 않았습니다."));
-        }
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
-            SharedMap<String, Object> input = INetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), 8192);
+            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
             SharedMap<String, Object> data = switch (operation) {
+                case "hq-withdraw" -> withdrawals.submit(input, trace);
                 case "transfer/settle" -> adminLedgerSvc.settle(input, clientIp, trace);
                 case "deposit/assign"  -> adminLedgerSvc.assignDeposit(input, clientIp, trace);
+                case "deposit/manual"  -> adminLedgerSvc.manualDeposit(input, clientIp, trace);
+                case "deposit/assign-hq" -> adminLedgerSvc.assignHqDeposit(input, clientIp, trace);
                 case "deposit/reject"  -> adminLedgerSvc.rejectDeposit(input, clientIp, trace);
+                case "invoice/bill"    -> adminLedgerSvc.billInvoice(input, clientIp, trace);
                 case "wallet/hold"     -> adminLedgerSvc.hold(input, clientIp, trace);
                 case "webhook/retry"   -> adminLedgerSvc.webhookRetry(input, clientIp, trace);
                 default -> throw new WalletException("W001", "요청 경로를 확인해 주세요.");

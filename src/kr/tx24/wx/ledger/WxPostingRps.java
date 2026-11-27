@@ -8,6 +8,11 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Base64;
+
+import kr.tx24.lib.kms.KMSUtils;
 
 /**
  * 원장 분개가 함께 쓰는 업무 시각·업무일과 요청값 검사를 모은다.
@@ -33,6 +38,17 @@ public final class WxPostingRps {
     static int businessDay(LocalDateTime time) {
 
         return Integer.parseInt(time.toLocalDate().format(DateTimeFormatter.BASIC_ISO_DATE));
+    }
+
+    /** 계좌번호와 기관·웹훅 본문을 암호화한다. 보호되지 않은 원문은 원장에 저장하지 않는다. */
+    static String encryptForLedger(String value) throws SQLException {
+
+        byte[] plain = value.getBytes(StandardCharsets.UTF_8);
+        byte[] encrypted = KMSUtils.encrypt(plain);
+        if (encrypted == null || Arrays.equals(plain, encrypted)) {
+            throw new SQLException("원장 민감정보 암호화에 실패했습니다.");
+        }
+        return Base64.getEncoder().encodeToString(encrypted);
     }
 
     static String field(SharedMap<String,Object> map, String key, int max) {

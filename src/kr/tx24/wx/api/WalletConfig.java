@@ -1,8 +1,9 @@
 package kr.tx24.wx.api;
 
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.List;
+import kr.tx24.lib.db.DBFactory;
+import kr.tx24.wx.config.InternalApiConfig;
+import java.sql.*;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
@@ -33,11 +34,8 @@ public final class WalletConfig {
     private static final SharedMap<String, Object> PROPERTY = load();
 
     private static final boolean ENABLED;
-    private static final String GATEWAY_PEERS;
-    private static final String INTERNAL_PEERS;
-    private static final String INTERNAL_KEY;
+    private static final InternalApiConfig CONFIG = new InternalApiConfig(true);
     private static final String UPSTREAM_ENV;
-    private static final List<String> ALERT_RECEIVERS;
 
     static {
         // 기관 원본은 전문 본문을 기록하므로 이 로거를 끄고 호출부의 처리 결과 로그만 남긴다.
@@ -49,19 +47,7 @@ public final class WalletConfig {
             // 키와 허용 주소를 비워 모든 업무 경로가 요청 시점에 거절하도록 둔다.
             logger.error("WX_API 가 비활성(enabled=false)이다. 업무 경로를 모두 거절한다.");
         }
-        GATEWAY_PEERS  = ENABLED ? peers(PROPERTY.getString("gateway.allowedIps", "127.0.0.1")) : "";
-        INTERNAL_PEERS = ENABLED ? peers(PROPERTY.getString("internal.allowedIps", "127.0.0.1")) : "";
-        INTERNAL_KEY   = ENABLED ? PROPERTY.getString("internal_api.key") : "";
-        if (INTERNAL_KEY.length() < 32) {
-            logger.warn("내부 경로 키(internal_api.key)가 없어 /api/internal/** 경로를 거절한다.");
-        }
-
-        ALERT_RECEIVERS = receivers(PROPERTY.getString("alert.receiver"));
-        logger.info("미매칭 입금 알림 수신자: {}명", ALERT_RECEIVERS.size());
-
-        // 설정 키는 env 다. test 와 prod 둘만 받는다. 비었거나 다른 값이면 송금을 접수하지 않는다.
-        UPSTREAM_ENV = java.util.Set.of("test", "prod").contains(PROPERTY.getString("env"))
-                ? PROPERTY.getString("env") : "";
+        UPSTREAM_ENV = ENABLED ? activateEnvironment() : "";
         if (UPSTREAM_ENV.isEmpty()) {
             logger.warn("실행 환경(env)이 test 도 prod 도 아니어서 송금 접수를 중지한다. 조회 업무만 제공한다.");
         } else if ("test".equals(UPSTREAM_ENV)) {
@@ -70,6 +56,46 @@ public final class WalletConfig {
                     + "실제 송금은 일어나지 않으며 모계좌 잔액은 Redis 의 시험 잔액을 쓴다.");
         } else {
             logger.info("기관 전송 환경이 prod 이다. HYPHEN 으로 실제 전문을 보낸다.");
+        }
+    }
+
+    /** 프로세스 시작 시에만 예정 환경을 적용한다. 전환 중 미결 업무가 있으면 기관 연동을 닫는다. */
+    private static String activateEnvironment() {
+
+        try (Connection db = DBFactory.get().getConnection()) {
+            db.setAutoCommit(false);
+            try (Statement query = db.createStatement()) {
+                String env;
+                String applied;
+                try (ResultSet row = query.executeQuery("SELECT apiEnv,apiAppliedEnv FROM WX.CONFIG WHERE id=1 FOR UPDATE")) {
+                    if (!row.next()) throw new SQLException("설정 없음");
+                    env = row.getString(1);
+                    applied = row.getString(2);
+                }
+                if (!java.util.Set.of("test", "prod").contains(env)) throw new SQLException("환경 미등록");
+                if (!env.equals(applied)) {
+                    try (ResultSet row = query.executeQuery("""
+                            SELECT EXISTS(SELECT 1 FROM WX.TRX_TRANSFER WHERE status IN ('접수','처리중','미확인'))
+                                OR EXISTS(SELECT 1 FROM WX.TRX_HQ_WITHDRAW WHERE status IN ('접수','처리중','미확인'))
+                                OR EXISTS(SELECT 1 FROM WX.HQ_BALANCE_RETRY)
+                            """)) {
+                        row.next();
+                        if (row.getBoolean(1)) throw new SQLException("미결 업무");
+                    }
+                    try (PreparedStatement update = db.prepareStatement("UPDATE WX.CONFIG SET apiAppliedEnv=? WHERE id=1")) {
+                        update.setString(1, env);
+                        update.executeUpdate();
+                    }
+                }
+                db.commit();
+                return env;
+            } catch (SQLException | RuntimeException failure) {
+                db.rollback();
+                throw failure;
+            }
+        } catch (SQLException | RuntimeException failure) {
+            logger.error("기관 환경 적용 실패. 설정과 미결 거래를 확인한 뒤 WX_API를 재시작하세요.");
+            return "";
         }
     }
 
@@ -120,50 +146,23 @@ public final class WalletConfig {
      * 고객사 경로의 허용 접속 주소.
      *
      * <p>TX24_HTTP 가 {@code /api/v1/wallet/**} 로 보내는 요청만 이 목록으로 판정한다. 고객사
-     * 자신의 IP 는 API 키에 등록한 {@code MCHT_WALLET_API_KEY.ips} 로 원장이 따로 대조한다.</p>
+     * 자신의 IP 는 Wallet 에 등록한 {@code WALLET_API_IPS} 목록으로 원장이 따로 대조한다.</p>
      */
     public static String gatewayAllowedIps() {
 
-        return GATEWAY_PEERS;
+        return ENABLED ? CONFIG.read().getString("apiGatewayIps") : "";
     }
 
-    /**
-     * 내부 경로의 허용 접속 주소.
-     *
-     * <p>WX_ADM·WX_TASK 가 {@code /api/internal/**} 로 보내는 요청만 이 목록으로 판정한다.
-     * 수신부는 공통 INet 서버 하나이고, 경로마다 허용 주소와 키를 다르게 둔다.</p>
-     *
-     * <p>설정이 없으면 루프백만 허용한다. 비워 두어 아무 데서나 들어오게 하지 않는다.</p>
-     */
-    public static String internalAllowedIps() {
+    /** 내부 요청 한 건의 IP와 현재·이전 인증키를 같은 설정 버전으로 확인한다. */
+    public static SharedMap<String, Object> internal() {
 
-        return INTERNAL_PEERS;
+        return ENABLED ? CONFIG.read() : SharedMap.of();
     }
 
-    /** 내부 경로 전용 키. WX_ADM·WX_TASK·입금 통지 시스템이 모두 이 키 하나를 쓴다. */
-    public static String internalKey() {
+    /** 교체 직후 허용된 송신자가 새 키로 먼저 접속한 경우 DB 버전을 다시 확인한다. */
+    public static SharedMap<String, Object> reloadInternal() {
 
-        return INTERNAL_KEY;
-    }
-
-    /** 내부 경로를 열어도 되는 상태인지. 키가 없으면 경로를 거절한다. */
-    public static boolean internalReady() {
-
-        return INTERNAL_KEY.length() >= 32;
-    }
-
-    /**
-     * 미매칭 입금 알림 수신자.
-     *
-     * <p>{@code alert.receiver} 에 쉼표로 나눠 둔다. 예: {@code 01011112222,01033334444}.
-     * 비어 있으면 SMS 를 보내지 않고 로그 경고만 남긴다.</p>
-     *
-     * <p>숫자만 남기고 8~15자리만 받는다. 모양이 아닌 값은 버리고 기동 로그에 건수를 남긴다.
-     * 수신자는 10명까지 둔다. 그 이상은 알림이 아니라 공지다.</p>
-     */
-    public static List<String> alertReceivers() {
-
-        return ALERT_RECEIVERS;
+        return ENABLED ? CONFIG.reload() : SharedMap.of();
     }
 
     /** 기관 전송 환경. 비어 있으면 기관 연동을 쓰지 않는다. */
@@ -178,27 +177,22 @@ public final class WalletConfig {
         return !UPSTREAM_ENV.isEmpty();
     }
 
+    /** 고객사 포털 웹훅 재접수 경로의 전용 키를 읽는다. */
+    public static String portalRetryKey() {
+
+        return ENABLED ? PROPERTY.getString("portal.webhook.key") : "";
+    }
+
+    /** 고객사 포털 웹훅 재접수를 요청할 수 있는 서버 주소를 읽는다. */
+    public static String portalPeers() {
+
+        return peers(PROPERTY.getString("portal.allowedIps"));
+    }
+
     /** 허용 주소 목록. 비어 있으면 루프백만 허용한다. */
     private static String peers(String value) {
 
         return value == null || value.isBlank() ? "127.0.0.1" : value.strip();
-    }
-
-    /** 수신자 목록을 숫자만 남겨 확인한다. 모양이 아닌 값은 버린다. */
-    private static List<String> receivers(String value) {
-
-        if (value == null || value.isBlank()) return List.of();
-        List<String> out = new ArrayList<>();
-        for (String item : value.split(",")) {
-            String phone = item.replaceAll("[^0-9]", "");
-            if (phone.length() < 8 || phone.length() > 15) {
-                if (!item.isBlank()) logger.warn("미매칭 알림 수신자 모양을 확인하세요. 한 건을 버렸다.");
-                continue;
-            }
-            if (!out.contains(phone)) out.add(phone);
-            if (out.size() >= 10) break;
-        }
-        return List.copyOf(out);
     }
 
 }

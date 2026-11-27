@@ -58,13 +58,8 @@ public final class DepositApi {
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
-        if (!WalletConfig.internalReady()) {
-            return INetUtils.response(request,
-                    INetUtils.error("TX503", "입금 통지 경로가 설정되지 않았습니다."));
-        }
         try {
-            SharedMap<String, Object> input = INetUtils.receive(channel, request,
-                    WalletConfig.internalAllowedIps(), "x-wx-key", WalletConfig.internalKey(), FRAME);
+            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, FRAME);
             // 접속 주소는 통지가 말하는 값이 아니라 실제 접속 주소를 쓴다. 감사 이력에 이 값이 남는다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
             return INetUtils.response(request, depositSvc.receive(input, clientIp, trace));

@@ -66,7 +66,7 @@ public final class DepositSvc {
 
         // 매칭이 끝나면 모계좌 잔액을 기관 값으로 맞춘다. 더하기만으로는 시간차를 메울 수 없다.
         if (!data.getBoolean("duplicate")) {
-            syncBankBalance(data, input, trace);
+            syncBankBalance(ledger, data, trace);
         }
 
         // 미매칭은 돈은 들어왔는데 Wallet 을 정하지 못한 상황이다. 운영자가 지정하기 전에는
@@ -93,54 +93,65 @@ public final class DepositSvc {
      * 모르는 입출금이 있으면 장부잔액이 실제와 벌어진다. 그래서 매칭이 끝나면 기관에 잔액을 물어
      * 그 값으로 맞춘다. 차이는 모계좌 원장의 조정 분개로 남는다.</p>
      *
-     * <p>실패해도 입금 기록을 되돌리지 않는다. 돈은 이미 들어왔고 기록은 끝났다. 다음 입금이나
-     * 운영자 조회에서 다시 맞출 기회가 있다.</p>
+     * <p>실패해도 입금 기록을 되돌리지 않는다. 돈은 이미 들어왔고 기록은 끝났다. 보류 건은 작업기가 선점 기한 후 다시 조회한다.</p>
      *
      * <p><b>시험 환경에서는 건너뛴다.</b> {@code env=test} 의 더미 잔액은 Redis 의 시험
      * 값이어서 원장과 아무 관계가 없다. 그 값으로 맞추면 시험 원장이 깨진다.</p>
+     *
+     * <p>통지 수신과 수동 입금이 함께 쓴다. 돈이 모계좌에 들어온 사실을 기록한 뒤에는 어느 경로든
+     * 같은 맞추기가 필요하다. 수동 입금은 특히 그렇다 — 통지를 놓친 사이 다른 입금의 맞추기가
+     * 이미 그 금액을 장부에 넣어 두었을 수 있어, 넣은 직후 실제 값으로 다시 맞춰야 한다.</p>
      */
-    private void syncBankBalance(SharedMap<String, Object> data, SharedMap<String, Object> input, String trace) {
+    static boolean syncBankBalance(WalletLedgerRps ledger, SharedMap<String, Object> data, String trace) {
 
-        String hqId      = data.getString("hqId", input.getString("hqId"));
+        String hqId      = data.getString("hqId");
         String depositId = data.getString("id");
-        if (hqId.isBlank() || depositId.isBlank()) return;
+        if (data.isBlank("claimId") || hqId.isBlank() || depositId.isBlank()) return false;
         if (!WalletConfig.upstreamReady()) {
             logger.info("기관 연동 설정이 없어 모계좌 잔액을 맞추지 않는다: hqId={}, trace={}", hqId, trace);
-            return;
+            return false;
         }
         if ("test".equals(WalletConfig.upstreamEnv())) {
             logger.info("시험 환경이어서 모계좌 잔액을 맞추지 않는다. 더미 잔액은 원장과 무관하다: "
                     + "hqId={}, trace={}", hqId, trace);
-            return;
+            return false;
         }
         SharedMap<String, Object> profile = data.getMap("upstream", TypeRegistry.MAP_SHAREDMAP_OBJECT);
         if (profile == null) {
             logger.warn("모계좌 기관 연동 설정이 없어 잔액을 맞추지 못한다: hqId={}, trace={}", hqId, trace);
-            return;
+            return false;
         }
         try {
+            long revision = ledger.bankBalanceRevision(hqId);
+            if (revision < 0) {
+                logger.info("모계좌에 진행 중인 거래가 있어 잔액 조정을 보류한다: hqId={}, trace={}", hqId, trace);
+                return false;
+            }
             SharedMap<String, Object> replied = new HyphenSvc(TransferSvc.upstream(data)).balance();
             if (!WalletPolicy.SUCCEEDED.equals(replied.getString("acqResultCd"))
                     || !replied.containsKey("balance")) {
                 logger.warn("기관 잔액 조회가 성공하지 않아 맞추지 않는다: hqId={}, acqResultCd={}, trace={}",
                         hqId, replied.getString("acqResultCd"), trace);
-                return;
+                return false;
             }
-            SharedMap<String, Object> synced = ledger.syncBankBalance(hqId, depositId,
-                    replied.getLong("balance"), trace);
+            SharedMap<String, Object> synced = ledger.syncBankBalance(data,
+                    replied.getLong("balance"), revision, trace);
             SharedMap<String, Object> result = synced.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
             if (!synced.getBoolean("result") || result == null) {
                 logger.warn("모계좌 잔액 동기화가 거절되었다: hqId={}, code={}, trace={}",
                         hqId, synced.getString("code"), trace);
-                return;
+                return false;
             }
+            if (result.getBoolean("deferred")) return false;
             logger.info("모계좌 잔액 동기화: hqId={}, 장부={}, 기관={}, 차이={}, 조정={}, trace={}",
                     hqId, result.getLong("before"), result.getLong("reported"), result.getLong("delta"),
                     result.getBoolean("changed"), trace);
+            return true;
         } catch (Exception failure) {
             // 입금은 이미 기록했다. 잔액 맞추기 실패로 그것을 되돌리지 않는다.
             logger.warn("모계좌 잔액을 맞추지 못했다: hqId={}, type={}, trace={}",
                     hqId, failure.getClass().getSimpleName(), trace);
+            return false;
         }
     }
 

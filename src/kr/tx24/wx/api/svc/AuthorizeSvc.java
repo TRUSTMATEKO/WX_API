@@ -35,8 +35,8 @@ public final class AuthorizeSvc {
     /**
      * 키 형식을 확인하고 원장에서 키에 연결된 Wallet을 확정한다.
      *
-     * <p>키 원문은 저장하지 않고 SHA-256 해시만 원장에 보낸다. 접속 IP 대조는 키에 등록된
-     * `ips` 규칙으로 원장이 수행한다.</p>
+     * <p>키 원문은 저장하지 않고 SHA-256 해시만 원장에 보낸다. 접속 IP 대조는 Wallet 에 등록된
+     * {@code WALLET_API_IPS} 목록으로 원장이 수행한다.</p>
      */
     public void authorize(WalletContext etx) {
 
