@@ -24,7 +24,7 @@ TX24_LIB의 `kr.tx24.inet.server.INetServer`를 실행한다.
 
 ## 예금주 조회 기관 설정
 
-모든 고객사의 예금주 조회는 `WX.CONFIG`의 `id=1` 행에서 `holderAcq`와 `holderOrgCode`를 읽는다. `apiEnv=test`이면 기관 시험망, `prod`이면 운영망으로 연결한다. 기관별로 다음 값을 설정한다.
+`apiEnv=test`에서는 예금주 조회를 접수하면 기관 설정 조회와 외부 통신을 생략하고 `테스트예금주`를 반환한다. `prod`에서는 모든 고객사가 `WX.CONFIG`의 `id=1` 행에 지정된 계약으로 운영망에 연결한다. 운영 기관별로 다음 값을 설정한다.
 
 | holderAcq | 추가 계약 설정 |
 | --- | --- |

@@ -39,7 +39,9 @@ public final class HolderSvc {
         inputMap.put("ioId", etx.getIo().getString("ioId"));
         inputMap.put("requestHash", etx.getIo().getString("requestHash"));
 
-        HolderProvider provider = HolderProvider.open(ledger.holderConfig(), WalletConfig.upstreamEnv());
+        String env = WalletConfig.upstreamEnv();
+        HolderProvider provider = "test".equals(env) ? HolderSvc::testHolder
+                : HolderProvider.open(ledger.holderConfig(), env);
 
         SharedMap<String, Object> receiptMap;
         try {
@@ -59,8 +61,8 @@ public final class HolderSvc {
         }
 
         String trxId = acceptedMap.getString("trxId");
-        logger.info("예금주 조회 접수 완료, 기관 전송 시작: trxId={}, bankCd={}, feeAmt={}, trace={}",
-                trxId, acceptedMap.getString("bankCd"), acceptedMap.getLong("feeAmt"), etx.getTrace());
+        logger.info("예금주 조회 접수 완료: env={}, trxId={}, bankCd={}, feeAmt={}, trace={}",
+                env, trxId, acceptedMap.getString("bankCd"), acceptedMap.getLong("feeAmt"), etx.getTrace());
 
         SharedMap<String, Object> repliedMap;
         try {
@@ -86,10 +88,18 @@ public final class HolderSvc {
             outcome = WalletPolicy.OUTCOME_SUCCESS;
         }
 
-        logger.info("기관 예금주 조회 응답: trxId={}, outcome={}, acqResultCd={}, trace={}",
-                trxId, outcome, code, etx.getTrace());
+        logger.info("예금주 조회 결과: env={}, trxId={}, outcome={}, acqResultCd={}, trace={}",
+                env, trxId, outcome, code, etx.getTrace());
 
         return finish(etx, trxId, outcome, code, repliedMap, acceptedMap, name);
+    }
+
+    /** /api/v1/wallet/holder 시험 환경은 모든 수취 계좌에 같은 시험 이름을 반환한다. */
+    private static SharedMap<String, Object> testHolder(String bank, String account) {
+
+        return SharedMap.<String, Object>of()
+                .add("acqResultCd", WalletPolicy.SUCCEEDED)
+                .add("holder", "테스트예금주");
     }
 
     /** 결과를 확정하고 고객사 응답을 만든다. 예금주 이름은 응답에만 담는다. */
