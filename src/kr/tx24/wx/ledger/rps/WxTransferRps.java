@@ -16,7 +16,6 @@ import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.lib.mapper.JacksonUtils;
 import kr.tx24.lib.redis.RedisUtils;
-import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.ledger.cst.LedgerKeys;
 import kr.tx24.wx.ledger.enm.LedgerCode;
@@ -204,7 +203,7 @@ public final class WxTransferRps {
             throws SQLException {
 
         String  walletId       = walletMap.getString("id");
-        String  cacheKey       = "WX:API:REFERENCE:" + WalletConfig.upstreamEnv() + ":WALLET:SETTINGS:" + walletId
+        String  cacheKey       = "WX:API:REFERENCE:WALLET:SETTINGS:" + walletId
                 + ":" + walletMap.getLong("editRev");
         boolean cacheAvailable = true;
         try {

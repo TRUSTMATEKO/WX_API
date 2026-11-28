@@ -19,7 +19,6 @@ import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.wx.ledger.enm.LedgerCode;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.ledger.utils.LedgerIp;
-import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.WalletPolicy;
 
 import static kr.tx24.wx.ledger.rps.WxDatabaseRps.rows;
@@ -253,7 +252,7 @@ public final class WxMerchantRps {
     /** 송금·예금주 조회 원장에 기록할 은행 표시명을 은행 코드로 읽는다. */
     static String bankName(Connection db, String bankCd) throws SQLException {
 
-        String  cacheKey       = "WX:API:REFERENCE:" + WalletConfig.upstreamEnv() + ":BANK:NAME:" + bankCd + ":0";
+        String  cacheKey       = "WX:API:REFERENCE:BANK:NAME:" + bankCd + ":0";
         boolean cacheAvailable = true;
         try {
             String name = RedisTextUtils.get(cacheKey);

@@ -59,12 +59,11 @@ public final class WalletPolicy {
 
     }
 
-    /** HYPHEN 헤더의 업체코드는 공백 없이 KSC5601로 표현 가능한 1~8바이트다. */
+    /** HYPHEN 업체코드의 필수값, 공백·제어 문자 및 KSC5601 인코딩 가능 여부를 확인한다. */
     public static boolean isValidAcqSid(String acqSid) {
 
         return acqSid != null && !acqSid.isEmpty()
                 && acqSid.codePoints().noneMatch(code -> Character.isWhitespace(code) || Character.isISOControl(code))
-                && HYPHEN_CHARSET.newEncoder().canEncode(acqSid)
-                && acqSid.getBytes(HYPHEN_CHARSET).length <= 8;
+                && HYPHEN_CHARSET.newEncoder().canEncode(acqSid);
     }
 }

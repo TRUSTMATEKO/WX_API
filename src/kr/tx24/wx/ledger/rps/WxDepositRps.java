@@ -1006,7 +1006,7 @@ public final class WxDepositRps {
     private static String hqBankName(Connection db, SharedMap<String, Object> bankMap) throws SQLException {
 
         String  hqId           = bankMap.getString("id");
-        String  cacheKey       = "WX:API:REFERENCE:" + WalletConfig.upstreamEnv() + ":HQ_ACCNT:BANK_NAME:" + hqId
+        String  cacheKey       = "WX:API:REFERENCE:HQ_ACCNT:BANK_NAME:" + hqId
                 + ":" + bankMap.getLong("settingRev");
         boolean cacheAvailable = true;
         try {

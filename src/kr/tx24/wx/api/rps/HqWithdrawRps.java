@@ -17,7 +17,6 @@ import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.redis.RedisTextUtils;
-import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletPolicy;
 
@@ -107,8 +106,7 @@ public final class HqWithdrawRps {
             }
 
             // 접수 중지 시간과 출금 종류별 가용액을 현재 원장 기준으로 확인한다.
-            ZonedDateTime             now       = DateUtils.getZonedDate(WalletPolicy.SEOUL);
-            String                    hhmm      = DateUtils.toString(now.toLocalTime(), "HHmm");
+            String                    hhmm      = DateUtils.getCurrentTime("HHmm");
             SharedMap<String, Object> configMap = tx.select("""
                     SELECT CASE WHEN firmStopStart IS NULL AND firmStopEnd IS NULL THEN 1
                         WHEN firmStopStart<firmStopEnd THEN NOT (? >= firmStopStart AND ? < firmStopEnd)
@@ -118,7 +116,7 @@ public final class HqWithdrawRps {
             if (configMap == null || configMap.getInt("openFlag") != 1) {
                 throw refused("송금 접수 중지 시간입니다.");
             }
-            int                       today    = Integer.parseInt(DateUtils.toString(now.toLocalDate()));
+            int                       today    = DateUtils.getRegDay();
             String                    walletId = walletMap.getString("id");
             SharedMap<String, Object> fundsMap = tx.select("SELECT * FROM WX.V_HQ_WITHDRAW_LIMIT WHERE hqId=?", hqId).getRow(0);
             if (fundsMap == null || amount > fundsMap.getLong(fee ? "payable" : "manualPayable")) {
@@ -235,7 +233,7 @@ public final class HqWithdrawRps {
     /** 과금 출금의 통장 표시명을 고객사 설정 버전으로 읽는다. */
     private static String merchantName(DBTrx tx, String mchtId, long revision) throws SQLException {
 
-        String  cacheKey       = "WX:API:REFERENCE:" + WalletConfig.upstreamEnv() + ":MCHT:NAME:" + mchtId + ":" + revision;
+        String  cacheKey       = "WX:API:REFERENCE:MCHT:NAME:" + mchtId + ":" + revision;
         boolean cacheAvailable = true;
         try {
             String name = RedisTextUtils.get(cacheKey);
