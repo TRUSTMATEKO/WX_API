@@ -1,11 +1,18 @@
 package kr.tx24.wx.ledger.rps;
 
+import io.lettuce.core.Limit;
+import io.lettuce.core.Range;
+import io.lettuce.core.ScoredValue;
+import io.lettuce.core.ZAddArgs;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,8 +20,9 @@ import org.slf4j.LoggerFactory;
 import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
-import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.lib.mapper.JacksonUtils;
+import kr.tx24.lib.redis.RedisText;
+import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.lib.redis.RedisUtils;
 import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.ledger.cst.LedgerKeys;
@@ -46,6 +54,16 @@ public final class WxTransferRps {
 
     /** 송금 요청 멱등 키 보관 시간. OPL과 같은 10분을 사용한다. */
     private static final long REQUEST_TTL = 10 * 60;
+    private static final long FEE_CACHE_SECONDS = TimeUnit.DAYS.toSeconds(1);
+
+    private static final long RECOVERY_DELAY_MS = TimeUnit.MINUTES.toMillis(2);
+    private static final long RECOVERY_SCAN_SECONDS = 5 * 60;
+    private static final int RECOVERY_SCAN_BATCH = 200;
+    private static final String RECOVERABLE = """
+            ((t.status='접수' AND COALESCE(t.bankTrxId,'')='')
+              OR (t.status IN ('미확인','처리중') AND t.bankTrxId REGEXP '^[0-9]{12}$'
+                  AND t.regDate>=NOW()-INTERVAL ? HOUR))
+            """;
 
     private WxTransferRps() {
 
@@ -101,7 +119,8 @@ public final class WxTransferRps {
                 walletId, company);
         if (ownerList.isEmpty()) throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
         String                          hqId     = ownerList.get(0).getString("hqId");
-        List<SharedMap<String, Object>> bankList = rows(db, new Retrieve("WX.HQ_ACCNT")
+        String                          trace    = inMap.getString("traceId");
+        List<SharedMap<String, Object>> bankList = lockRows(db, "HQ_ACCNT", trace, new Retrieve("WX.HQ_ACCNT")
                 .columns("id,balance,reservedAmt,balance-reservedAmt AS payable,alarmBalance,acq,acqId")
                 .column("bankCd AS acqBankCd,accntNo AS acqAccount,COALESCE(key2,'') AS acqKey2")
                 .where("id=? AND status='사용'")
@@ -112,8 +131,8 @@ public final class WxTransferRps {
             throw new LedgerEx(LedgerCode.REQUEST_UNAVAILABLE, "송금을 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
         }
         WxMerchantRps.requireActiveAcquirer(bankList.get(0));
-        List<SharedMap<String, Object>> walletList = rows(db, new Retrieve("WX.WALLET w")
-                .columns("w.id,w.mchtId,w.hqId,w.editRev")
+        List<SharedMap<String, Object>> walletList = lockRows(db, "WALLET", trace, new Retrieve("WX.WALLET w")
+                .columns("w.id,w.mchtId,w.hqId,w.limitOnce,w.limitDay,w.limitMonth,w.minWithdrawAmt,w.sender")
                 .column("b.balance,b.held,b.available")
                 .joinInner("WX.WALLET_BALANCE b", "b.walletId=w.id")
                 .where("w.id=? AND w.mchtId=? AND w.hqId=? AND w.ownerType='MCHT'")
@@ -127,8 +146,10 @@ public final class WxTransferRps {
         logger.debug("송금 수수료 산정: mchtId={}, amount={}, feeAmt={}, feeRateIdx={}",
                 company, amount, charge, rateMap.getString("feeRateIdx"));
 
-        SharedMap<String, Object> settingsMap = walletSettings(db, accountMap);
-        checkLimit(db, walletId, settingsMap, amount, day);
+        if (!isWalletSettings(accountMap)) {
+            throw new LedgerEx(LedgerCode.UNAVAILABLE, "Wallet 출금 설정을 확인해 주세요.");
+        }
+        checkLimit(db, walletId, accountMap, amount, now);
 
         long available = accountMap.getLong("available");
         if (available < amount) {
@@ -151,7 +172,7 @@ public final class WxTransferRps {
         }
 
         String trxId  = IDUtils.getUnique("S");
-        String sender = inMap.isBlank("sender") ? settingsMap.getString("sender")
+        String sender = inMap.isBlank("sender") ? accountMap.getString("sender")
                 : WxPostingRps.field(inMap, "sender", 20);
         String holder = inMap.getString("holder");
 
@@ -199,42 +220,20 @@ public final class WxTransferRps {
                 .add("upstream", upstreamMap);
     }
 
-    /** 잠근 Wallet의 설정 버전으로 출금한도, 최소 출금액과 기본 송금자명을 함께 읽는다. */
-    private static SharedMap<String, Object> walletSettings(Connection db, SharedMap<String, Object> walletMap)
-            throws SQLException {
+    /** 송금 접수의 잠금 대기와 행 조회에 걸린 시간을 함께 기록한다. */
+    private static List<SharedMap<String, Object>> lockRows(Connection db, String target, String trace,
+                                                          String sql, Object... args) throws SQLException {
 
-        String  walletId       = walletMap.getString("id");
-        String  cacheKey       = "WX:API:REFERENCE:WALLET:SETTINGS:" + walletId
-                + ":" + walletMap.getLong("editRev");
-        boolean cacheAvailable = true;
+        long start = System.nanoTime();
         try {
-            SharedMap<String, Object> cachedMap = RedisUtils.get(cacheKey, TypeRegistry.MAP_SHAREDMAP_OBJECT);
-            if (cachedMap != null && isWalletSettings(cachedMap)) {
-                return cachedMap;
-            }
-        } catch (RuntimeException unavailable) {
-            cacheAvailable = false;
+            return rows(db, sql, args);
+        } finally {
+            logger.info("Wallet API 소요 시간: operation=payout, stage=lockQuery, target={}, elapsedMs={}, trace={}",
+                    target, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
         }
-
-        SharedMap<String, Object> rowMap = rows(db, """
-                SELECT limitOnce,limitDay,limitMonth,minWithdrawAmt,sender
-                  FROM WX.WALLET WHERE id=? FOR UPDATE
-                """, walletId).get(0);
-        if (!isWalletSettings(rowMap)) {
-            throw new LedgerEx(LedgerCode.UNAVAILABLE, "Wallet 출금 설정을 확인해 주세요.");
-        }
-
-        if (cacheAvailable) {
-            try {
-                RedisUtils.set(cacheKey, rowMap, WalletPolicy.REFERENCE_CACHE_SECONDS);
-            } catch (RuntimeException unavailable) {
-                // 잠근 Wallet에서 읽은 설정으로 처리한다.
-            }
-        }
-        return rowMap;
     }
 
-    /** 캐시 필드가 누락되거나 형식이 잘못되어 한도가 0으로 해석되는 경우를 막는다. */
+    /** 잠근 Wallet의 한도 설정이 누락되거나 잘못된 형식이면 무제한으로 처리하지 않는다. */
     private static boolean isWalletSettings(SharedMap<String, Object> settingsMap) {
 
         return settingsMap.get("sender") instanceof String
@@ -279,47 +278,50 @@ public final class WxTransferRps {
         String walletId = accountMap.getString("id");
         long   before   = accountMap.getLong("balance");
         long   after    = Math.subtractExact(before, amount);
-        long   sequence = rows(db, "SELECT COALESCE(MAX(`sequence`),0)+1 AS nextSequence FROM WX.TRX_WALLET WHERE walletId=?",
-                walletId).get(0).getLong("nextSequence");
-        String id  = IDUtils.getUnique("T");
-        int    day = WxPostingRps.businessDay(now);
+        String id       = IDUtils.getUnique("T");
+        int    day      = WxPostingRps.businessDay(now);
         update(db, """
                 INSERT INTO WX.TRX_WALLET(id,ownerType,mchtId,walletId,hqId,trackId,refType,refId,refSeq,`sequence`,
                                           trxType,dtlType,status,amount,depositAmt,withdrawnAmt,fee,balance,balanceAfter,
                                           bankCd,bankName,holder,accntNo,sender,trxDay,trxDate,regId,regDay)
-                VALUES(?,'MCHT',?,?,?,?,'TRX_TRANSFER',?,1,?,'출금','일반출금','처리중',?,0,?,?,?,?,?,?,?,?,?,?,?,'WX_API',?)
-                """, id, accountMap.getString("mchtId"), walletId, accountMap.getString("hqId"), track, trxId, sequence,
+                SELECT ?,'MCHT',?,?,?,?,'TRX_TRANSFER',?,1,COALESCE(MAX(`sequence`),0)+1,
+                       '출금','일반출금','처리중',?,0,?,?,?,?,?,?,?,?,?,?,?,'WX_API',?
+                  FROM WX.TRX_WALLET WHERE walletId=?
+                """, id, accountMap.getString("mchtId"), walletId, accountMap.getString("hqId"), track, trxId,
                 Math.negateExact(amount), amount, charge, before, after, bankCd, bankName, holder, accntNo, sender,
-                day, now, day);
-        logger.debug("고객 Wallet 출금 선차감 분개: walletId={}, before={}, after={}, sequence={}",
-                walletId, before, after, sequence);
+                day, now, day, walletId);
+        logger.debug("고객 Wallet 출금 선차감 분개: walletId={}, before={}, after={}, ledgerId={}",
+                walletId, before, after, id);
         return id;
     }
 
     /** 과금 기준일에 적용할 수수료 단가를 조회한다. 마감 검증과 같은 식으로 계산한다. */
     private static SharedMap<String, Object> fee(Connection db, String company, int day, long amount) throws SQLException {
 
-        List<SharedMap<String, Object>> appliedList = rows(db, """
-                SELECT idx,transferUnitAmt,transferPercentRate,
-                       transferUnitAmt+ROUND(?*transferPercentRate/100,0) AS feeAmt
-                  FROM WX.MCHT_FEE WHERE mchtId=? AND applyDay<=? AND status='사용'
-                 ORDER BY applyDay DESC LIMIT 1
-                """, amount, company, day);
-        if (appliedList.isEmpty()) {
-            // 계약이 없으면 과금하지 않는다. 마감 검증은 요율 ID가 없고 단가가 0인 건을 정상으로 본다.
-            logger.debug("적용 수수료 계약 없음: mchtId={}, baseDay={}", company, day);
+        String key = "WX:API:TRANSFER:FEE:" + company + ":" + day;
+        SharedMap<String, Object> policyMap = WxDatabaseRps.fetchRow(key, FEE_CACHE_SECONDS,
+                () -> WxDatabaseRps.select(db, """
+                        SELECT COALESCE(f.idx,0) AS idx,f.transferUnitAmt,CAST(f.transferPercentRate AS CHAR) AS transferPercentRate
+                          FROM (SELECT 1) seed LEFT JOIN (
+                               SELECT idx,transferUnitAmt,transferPercentRate FROM WX.MCHT_FEE
+                                WHERE mchtId=? AND applyDay<=? AND status='사용'
+                                ORDER BY applyDay DESC LIMIT 1
+                          ) f ON 1=1
+                        """, company, day));
+        if (policyMap.getLong("idx") == 0) {
             return SharedMap.<String, Object>of()
                     .add("feeAmt", 0L);
         }
+        long percentFee = policyMap.getBigDecimal("transferPercentRate").multiply(BigDecimal.valueOf(amount))
+                .movePointLeft(2).setScale(0, RoundingMode.HALF_UP).longValueExact();
         return SharedMap.<String, Object>of()
-                .add("feeAmt", appliedList.get(0).getLong("feeAmt"))
-                .add("feeRateIdx", appliedList.get(0).getLong("idx"));
+                .add("feeAmt", Math.addExact(policyMap.getLong("transferUnitAmt"), percentFee))
+                .add("feeRateIdx", policyMap.getLong("idx"));
     }
 
     /** 건당·일·월 한도와 최소 출금액을 확인한다. 0은 무제한으로 본다. */
     private static void checkLimit(Connection db, String walletId, SharedMap<String, Object> settingsMap,
-                                    long amount, int day)
-            throws SQLException {
+                                   long amount, LocalDateTime now) throws SQLException {
 
         long minimum = settingsMap.getLong("minWithdrawAmt");
         if (minimum > 0 && amount < minimum) throw new LedgerEx(LedgerCode.INVALID, "최소 출금금액 미만입니다.");
@@ -334,12 +336,25 @@ public final class WxTransferRps {
         if (dayLimit <= 0 && monthLimit <= 0) return;
 
         // 실패로 확정된 건은 한도에서 제외하고 미확정과 성공만 센다.
-        SharedMap<String, Object> usedMap = rows(db, """
-                SELECT COALESCE(SUM(CASE WHEN regDay=? THEN amount ELSE 0 END),0) AS dayAmt,
-                       COALESCE(SUM(amount),0) AS monthAmt
-                  FROM WX.TRX_TRANSFER
-                 WHERE walletId=? AND regDay DIV 100=? AND status<>'실패'
-                """, day, walletId, day / 100).get(0);
+        int day = WxPostingRps.businessDay(now);
+        SharedMap<String, Object> usedMap;
+        if (monthLimit > 0) {
+            LocalDateTime monthStart = now.withDayOfMonth(1);
+            int           firstDay   = WxPostingRps.businessDay(monthStart);
+            int           nextMonth  = WxPostingRps.businessDay(monthStart.plusMonths(1));
+            usedMap = rows(db, """
+                    SELECT COALESCE(SUM(CASE WHEN regDay=? THEN amount ELSE 0 END),0) AS dayAmt,
+                           COALESCE(SUM(amount),0) AS monthAmt
+                      FROM WX.TRX_TRANSFER
+                     WHERE walletId=? AND regDay>=? AND regDay<? AND status<>'실패'
+                    """, day, walletId, firstDay, nextMonth).get(0);
+        } else {
+            usedMap = rows(db, """
+                    SELECT COALESCE(SUM(amount),0) AS dayAmt
+                      FROM WX.TRX_TRANSFER
+                     WHERE walletId=? AND regDay=? AND status<>'실패'
+                    """, walletId, day).get(0);
+        }
         if (dayLimit > 0 && usedMap.getLong("dayAmt") + amount > dayLimit) {
             logger.info("송금 일 한도 초과: walletId={}, used={}, amount={}, limitDay={}",
                     walletId, usedMap.getLong("dayAmt"), amount, dayLimit);
@@ -424,10 +439,11 @@ public final class WxTransferRps {
                 }
                 throw failure;
             }
-            balance(db, resultMap);
+            if (!unsentOnly) balance(db, resultMap);
         }
 
-        // 커밋 이후의 Redis 정리와 웹훅 큐 등록은 확정 결과를 바꾸지 않는다.
+        // Redis 복구 등록, 멱등 키 정리, 웹훅 발행은 커밋된 결과를 바꾸지 않는다.
+        if (resultMap.isEquals("status", "미확인")) enqueueRecovery(trxId);
         WxWebhookRps.publish(resultMap);
         clearRequest(resultMap);
         return resultMap;
@@ -437,8 +453,27 @@ public final class WxTransferRps {
     private static SharedMap<String, Object> settle(Connection db, String trxId, String outcome,
                                                      SharedMap<String, Object> inMap, boolean unsentOnly) throws SQLException {
 
-        long                            bankBalance = lockTransferBank(db, trxId);
-        List<SharedMap<String, Object>> foundList   = rows(db, new Retrieve("WX.TRX_TRANSFER t")
+        List<SharedMap<String, Object>> bankList = lockTransferBankRows(db, trxId, true);
+        long bankBalance;
+        if (bankList.isEmpty()) {
+            List<SharedMap<String, Object>> ownerList = rows(db, """
+                    SELECT t.status,t.mchtId,t.trackId,t.walletId,CASE WHEN h.id IS NULL THEN 0 ELSE 1 END AS hasBank
+                      FROM WX.TRX_TRANSFER t LEFT JOIN WX.HQ_ACCNT h ON h.id=t.hqId
+                     WHERE t.trxId=?
+                    """, trxId);
+            if (ownerList.isEmpty()) throw new LedgerEx(LedgerCode.NOT_FOUND, "송금 거래를 찾을 수 없습니다.");
+            SharedMap<String, Object> ownerMap = ownerList.get(0);
+            if (ownerMap.getInt("hasBank") == 0) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 찾을 수 없습니다.");
+            // 성공과 실패는 미확정으로 돌아가지 않으므로 현재 상태만 읽어 중복 확정을 종결한다.
+            if (ownerMap.isEquals("status", "성공") || ownerMap.isEquals("status", "실패")) {
+                return unchanged(trxId, ownerMap);
+            }
+            bankBalance = lockTransferBank(db, trxId);
+        } else {
+            bankBalance = bankList.get(0).getLong("balance");
+        }
+
+        List<SharedMap<String, Object>> foundList = rows(db, new Retrieve("WX.TRX_TRANSFER t")
                 .columns("t.trxId,t.mchtId,t.walletId,t.hqId,t.amount,t.feeAmt,t.status,t.sender,t.holder")
                 .column("t.trackId,t.bankCd,t.bankName,t.accntNo,t.bankTrxId,t.walletTrxId")
                 .column("CASE WHEN t.regDate<=NOW()-INTERVAL 2 MINUTE THEN 1 ELSE 0 END AS expired")
@@ -449,15 +484,7 @@ public final class WxTransferRps {
         String status = transferMap.getString("status");
         if (!OPEN.contains(status) || (unsentOnly && (!"접수".equals(status) || !transferMap.isBlank("bankTrxId")
                 || transferMap.getInt("expired") != 1))) {
-            logger.info("송금 상태 변경을 건너뛴다: trxId={}, status={}", trxId, status);
-            return SharedMap.<String, Object>of()
-                    .add("trxId", trxId)
-                    .add("status", status)
-                    .add("beforeStatus", status)
-                    .add("mchtId", transferMap.getString("mchtId"))
-                    .add("trackId", transferMap.getString("trackId"))
-                    .add("walletId", transferMap.getString("walletId"))
-                    .add("changed", false);
+            return unchanged(trxId, transferMap);
         }
 
         String acqTrxId   = inMap.getString("acqTrxId", transferMap.getString("bankTrxId"));
@@ -508,7 +535,7 @@ public final class WxTransferRps {
                     .add("amount", amount)
                     .add("acqTrxId", acqTrxId);
             // 확정과 통지를 한 트랜잭션에 둔다. 확정만 되고 통지가 빠지는 상태를 만들지 않는다.
-            WxWebhookRps.enqueue(db, resultMap, WxWebhookRps.TRANSFER_SETTLED, WxPostingRps.postingTime(db));
+            WxWebhookRps.enqueue(db, resultMap, WxWebhookRps.TRANSFER_SETTLED, null);
             return resultMap;
         }
 
@@ -543,6 +570,21 @@ public final class WxTransferRps {
         // 확정과 통지를 한 트랜잭션에 둔다. 확정만 되고 통지가 빠지는 상태를 만들지 않는다.
         WxWebhookRps.enqueue(db, resultMap, WxWebhookRps.TRANSFER_SETTLED, postedAt);
         return resultMap;
+    }
+
+    /** 상태가 그대로인 확정 요청에 기존 거래 정보와 감사 기록용 상태를 반환한다. */
+    private static SharedMap<String, Object> unchanged(String trxId, SharedMap<String, Object> transferMap) {
+
+        String status = transferMap.getString("status");
+        logger.info("송금 상태 변경을 건너뛴다: trxId={}, status={}", trxId, status);
+        return SharedMap.<String, Object>of()
+                .add("trxId", trxId)
+                .add("status", status)
+                .add("beforeStatus", status)
+                .add("mchtId", transferMap.getString("mchtId"))
+                .add("trackId", transferMap.getString("trackId"))
+                .add("walletId", transferMap.getString("walletId"))
+                .add("changed", false);
     }
 
     /**
@@ -634,29 +676,37 @@ public final class WxTransferRps {
         }
     }
 
-    /** 송금 확정과 장애 복구에서 모계좌를 먼저 잠그고 차감 전 장부잔액을 반환한다. */
+    /** 중복 확정 생략 조건 없이 모계좌를 먼저 잠그고 차감 전 장부잔액을 반환한다. */
     private static long lockTransferBank(Connection db, String trxId) throws SQLException {
 
+        List<SharedMap<String, Object>> bankList = lockTransferBankRows(db, trxId, false);
+        if (!bankList.isEmpty()) return bankList.get(0).getLong("balance");
+
+        // 조회에 실패한 경우에만 거래가 없는지, 연결된 모계좌가 없는지 구분한다.
         List<SharedMap<String, Object>> ownerList = rows(db, "SELECT hqId FROM WX.TRX_TRANSFER WHERE trxId=?", trxId);
         if (ownerList.isEmpty()) throw new LedgerEx(LedgerCode.NOT_FOUND, "송금 거래를 찾을 수 없습니다.");
-        List<SharedMap<String, Object>> bankList = rows(db, new Retrieve("WX.HQ_ACCNT")
+        throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 찾을 수 없습니다.");
+    }
+
+    /** 하위 조회는 송금의 모계좌 ID를 읽고 바깥 조회에서 모계좌 행만 잠근다. */
+    private static List<SharedMap<String, Object>> lockTransferBankRows(Connection db, String trxId,
+                                                                      boolean skipFinalized) throws SQLException {
+
+        String statusCondition = skipFinalized ? " AND (status IS NULL OR status NOT IN ('성공','실패'))" : "";
+        return rows(db, new Retrieve("WX.HQ_ACCNT")
                 .columns("balance")
-                .where("id=?")
-                .forUpdate().build(),
-                ownerList.get(0).getString("hqId"));
-        if (bankList.isEmpty()) {
-            throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 찾을 수 없습니다.");
-        }
-        return bankList.get(0).getLong("balance");
+                .where("id=(SELECT hqId FROM WX.TRX_TRANSFER WHERE trxId=?" + statusCondition + ")")
+                .forUpdate().build(), trxId);
     }
 
     /** 확정 트랜잭션이 깨진 경우 자체 연결로 미확정 주차만 수행한다. */
     private static void parkAfterFailure(String trxId, SharedMap<String, Object> inMap) {
 
+        int changed;
         try (Connection db = WxDatabaseRps.open()) {
             db.setAutoCommit(false);
             lockTransferBank(db, trxId);
-            int changed = update(db, "UPDATE WX.TRX_TRANSFER SET status='미확인',responseCode=?,udtId=?"
+            changed = update(db, "UPDATE WX.TRX_TRANSFER SET status='미확인',responseCode=?,udtId=?"
                     + " WHERE trxId=? AND status='처리중' AND bankTrxId REGEXP '^[0-9]{12}$'",
                     inMap.getString("responseCode"),
                     inMap.isBlank("actor") ? "WX_API" : inMap.getString("actor"), trxId);
@@ -668,53 +718,139 @@ public final class WxTransferRps {
         } catch (Exception failure) {
             // 여기까지 실패하면 자동 해소 경로가 없다. 운영자가 처리 이력으로 확인해야 한다.
             logger.error("송금 미확정 주차 실패, 수동 확인 필요: trxId={}", trxId, failure);
+            return;
+        }
+        if (changed == 1) enqueueRecovery(trxId);
+    }
+
+    /** 커밋한 미확정 송금을 등록한다. 누락된 등록은 주기 조회로 복구한다. */
+    private static void enqueueRecovery(String trxId) {
+
+        try {
+            RedisText.sync().zadd(LedgerKeys.TRANSFER_RECOVERY_QUEUE, new ZAddArgs().nx(),
+                    System.currentTimeMillis(), trxId);
+        } catch (RuntimeException failure) {
+            logger.warn("송금 복구 큐 등록 실패: trxId={}, type={}", trxId, failure.getClass().getSimpleName());
         }
     }
 
-    /** 미전송 접수와 기관 결과가 미확정인 거래를 다음 작업 주기까지 선점한다. */
+    /** 복구 처리 시각이 된 거래를 Redis에서 읽고 DB에서 거래번호로 선점한다. */
     public static List<SharedMap<String, Object>> pending(int limit) throws SQLException {
 
         int                             wanted  = Math.min(Math.max(limit, 1), 10);
         List<SharedMap<String, Object>> outList = new ArrayList<>();
+        if (RedisTextUtils.setNx(LedgerKeys.TRANSFER_RECOVERY_SCAN, "1", RECOVERY_SCAN_SECONDS)) {
+            try (Connection db = WxDatabaseRps.open()) {
+                replenishRecovery(db);
+            } catch (SQLException | RuntimeException failure) {
+                logger.warn("송금 복구 큐 누락 확인 실패: type={}", failure.getClass().getSimpleName());
+            }
+        }
+
+        List<String> idsList = RedisText.sync().zrangebyscore(LedgerKeys.TRANSFER_RECOVERY_QUEUE,
+                Range.create(0L, System.currentTimeMillis()), Limit.create(0, wanted * 4L));
+        if (idsList.isEmpty()) return outList;
+
         try (Connection db = WxDatabaseRps.open()) {
-            // 읽기와 선점은 각각 짧게 끝내고 기관 응답을 기다리는 동안 DB 잠금을 유지하지 않는다.
             db.setAutoCommit(true);
-            List<SharedMap<String, Object>> candidatesList = rows(db, """
-                    SELECT t.trxId,t.hqId,t.status,t.bankTrxId,h.acq,h.acqId,h.bankCd acqBankCd,
-                           h.accntNo acqAccount,COALESCE(h.key2,'') acqKey2
-                      FROM WX.TRX_TRANSFER t JOIN WX.HQ_ACCNT h ON h.id=t.hqId
-                     WHERE ((t.status='접수' AND COALESCE(t.bankTrxId,'')='')
-                            OR (t.status IN ('미확인','처리중') AND t.bankTrxId REGEXP '^[0-9]{12}$'
-                                AND t.regDate>=NOW()-INTERVAL ? HOUR))
-                       AND t.regDate<=NOW()-INTERVAL 2 MINUTE
-                       AND (t.recoveryCheckedAt IS NULL OR t.recoveryCheckedAt<=NOW()-INTERVAL 2 MINUTE)
-                     ORDER BY COALESCE(t.recoveryCheckedAt,t.regDate),t.trxId LIMIT ?
-                    """, RECOVERY_HOURS, wanted);
-            for (SharedMap<String, Object> rowMap : candidatesList) {
-                String trxId   = rowMap.getString("trxId");
-                int    claimed = update(db, """
-                        UPDATE WX.TRX_TRANSFER SET recoveryCheckedAt=CURRENT_TIMESTAMP(3)
-                         WHERE trxId=? AND status=? AND COALESCE(bankTrxId,'')=?
-                           AND (recoveryCheckedAt IS NULL OR recoveryCheckedAt<=NOW()-INTERVAL 2 MINUTE)
-                        """, trxId, rowMap.getString("status"), rowMap.getString("bankTrxId"));
-                if (claimed != 1) continue;
-
-                if (rowMap.isEquals("status", "접수")) {
-                    outList.add(SharedMap.<String, Object>of()
-                            .add("trxId", trxId)
-                            .add("status", "접수"));
-                    continue;
-                }
-
-                SharedMap<String, Object> profileMap = upstream(rowMap.getString("hqId"), rowMap);
-                if (profileMap != null) {
-                    outList.add(SharedMap.<String, Object>of()
-                            .add("trxId", trxId)
-                            .add("bankTrxId", rowMap.getString("bankTrxId"))
-                            .add("upstream", profileMap));
-                }
+            for (String trxId : idsList) {
+                SharedMap<String, Object> rowMap = claimRecovery(db, trxId);
+                if (rowMap != null) outList.add(rowMap);
+                if (outList.size() == wanted) break;
             }
         }
         return outList;
+    }
+
+    /** Redis 대기 목록에 없는 DB 후보만 추가한다. 전송 전 접수는 지난 날짜도 확인한다. */
+    private static void replenishRecovery(Connection db) throws SQLException {
+
+        int    lastDay = 0;
+        String lastId  = "";
+        while (true) {
+            List<SharedMap<String, Object>> candidateList = rows(db, """
+                    SELECT t.trxId,t.regDay,
+                           CAST(UNIX_TIMESTAMP(GREATEST(t.regDate,COALESCE(t.recoveryCheckedAt,t.regDate)))*1000 AS SIGNED)
+                           +? AS dueMs
+                      FROM WX.TRX_TRANSFER t JOIN WX.HQ_ACCNT h ON h.id=t.hqId
+                     WHERE t.status IN ('접수','미확인','처리중')
+                       AND t.regDay BETWEEN ? AND DATE_FORMAT(CURRENT_DATE(),'%Y%m%d')+0
+                       AND (t.regDay>? OR t.trxId>?)
+                       AND (t.status='접수' OR t.regDay>=DATE_FORMAT(NOW()-INTERVAL ? HOUR,'%Y%m%d')+0)
+                       AND
+                    """ + RECOVERABLE + " ORDER BY t.regDay,t.trxId LIMIT ?",
+                    RECOVERY_DELAY_MS, lastDay, lastDay, lastId, RECOVERY_HOURS, RECOVERY_HOURS, RECOVERY_SCAN_BATCH);
+            if (candidateList.isEmpty()) return;
+
+            List<ScoredValue<String>> entriesList = new ArrayList<>(candidateList.size());
+            for (SharedMap<String, Object> candidateMap : candidateList) {
+                entriesList.add(ScoredValue.just(candidateMap.getLong("dueMs"), candidateMap.getString("trxId")));
+            }
+            @SuppressWarnings("unchecked")
+            ScoredValue<String>[] entries = entriesList.toArray(ScoredValue[]::new);
+            RedisText.sync().zadd(LedgerKeys.TRANSFER_RECOVERY_QUEUE, new ZAddArgs().nx(), entries);
+            if (candidateList.size() < RECOVERY_SCAN_BATCH) return;
+
+            SharedMap<String, Object> lastMap = candidateList.get(candidateList.size() - 1);
+            lastDay = lastMap.getInt("regDay");
+            lastId  = lastMap.getString("trxId");
+        }
+    }
+
+    /** 원장의 선점 조건을 만족한 호출만 처리하도록 하고 큐에는 다음 재시도 시각을 남긴다. */
+    private static SharedMap<String, Object> claimRecovery(Connection db, String trxId) throws SQLException {
+
+        List<SharedMap<String, Object>> candidateList = rows(db, """
+                SELECT t.status,t.bankTrxId,t.hqId,h.acq,h.acqId,h.bankCd acqBankCd,
+                       h.accntNo acqAccount,COALESCE(h.key2,'') acqKey2,
+                       CAST(UNIX_TIMESTAMP(GREATEST(t.regDate,COALESCE(t.recoveryCheckedAt,t.regDate)))*1000 AS SIGNED)
+                       +? AS dueMs,
+                       CAST(UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000 AS SIGNED) AS nowMs
+                  FROM WX.TRX_TRANSFER t JOIN WX.HQ_ACCNT h ON h.id=t.hqId
+                 WHERE t.trxId=? AND
+                """ + RECOVERABLE, RECOVERY_DELAY_MS, trxId, RECOVERY_HOURS);
+        if (candidateList.isEmpty()) {
+            RedisText.sync().zrem(LedgerKeys.TRANSFER_RECOVERY_QUEUE, trxId);
+            return null;
+        }
+        SharedMap<String, Object> rowMap = candidateList.get(0);
+        long due = rowMap.getLong("dueMs");
+        long now = rowMap.getLong("nowMs");
+        if (due > now) {
+            scheduleRecovery(trxId, due);
+            return null;
+        }
+
+        int claimed = update(db, """
+                UPDATE WX.TRX_TRANSFER t SET recoveryCheckedAt=CURRENT_TIMESTAMP(3)
+                 WHERE t.trxId=? AND t.status=? AND COALESCE(t.bankTrxId,'')=?
+                   AND t.regDate<=NOW()-INTERVAL 2 MINUTE
+                   AND (t.recoveryCheckedAt IS NULL OR t.recoveryCheckedAt<=NOW()-INTERVAL 2 MINUTE)
+                   AND
+                """ + RECOVERABLE, trxId, rowMap.getString("status"), rowMap.getString("bankTrxId"), RECOVERY_HOURS);
+        if (claimed != 1) return null;
+
+        scheduleRecovery(trxId, now + RECOVERY_DELAY_MS);
+        if (rowMap.isEquals("status", "접수")) {
+            return SharedMap.<String, Object>of()
+                    .add("trxId", trxId)
+                    .add("status", "접수");
+        }
+        SharedMap<String, Object> profileMap = upstream(rowMap.getString("hqId"), rowMap);
+        if (profileMap == null) return null;
+        return SharedMap.<String, Object>of()
+                .add("trxId", trxId)
+                .add("bankTrxId", rowMap.getString("bankTrxId"))
+                .add("upstream", profileMap);
+    }
+
+    /** 앞선 호출이 기록한 더 늦은 재시도 예약을 유지한다. */
+    private static void scheduleRecovery(String trxId, long due) {
+
+        try {
+            RedisText.sync().zadd(LedgerKeys.TRANSFER_RECOVERY_QUEUE, new ZAddArgs().gt(), due, trxId);
+        } catch (RuntimeException failure) {
+            logger.warn("송금 복구 재시도 예약 실패: trxId={}, type={}", trxId, failure.getClass().getSimpleName());
+        }
     }
 }

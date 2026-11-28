@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.util.function.Consumer;
 import java.util.Set;
 
 /** 고객사 Wallet API의 접근 확인, 요청 이력, 업무 실행과 응답을 처리한다. */
@@ -64,8 +65,8 @@ public final class WalletFlowSvc {
     }
 
     /** Wallet 네 경로: 키와 등록 IP를 먼저 확인한 뒤 업무 본문을 읽고 처리한다. */
-    public SharedMap<String, Object> wallet(String action, String authorization, String clientIp,
-                                             String contentType, InputStream body, String trace) {
+    public SharedMap<String, Object> wallet(String action, String authorization, String clientIp, String contentType,
+                                            InputStream body, String trace, Consumer<Runnable> afterResponse) {
 
         WalletContext etx = new WalletContext(action, authorization, clientIp, contentType, trace);
 
@@ -91,7 +92,7 @@ public final class WalletFlowSvc {
         logger.debug("전처리 완료: action={}, walletId={}, ioId={}, trace={}",
                 action, etx.getWalletId(), etx.getIo().getString("ioId"), trace);
 
-        // 업무 실패도 결과이므로 완료 이력을 남긴다.
+        // 업무 실패도 결과이므로 응답 종료 후 완료 이력에 남긴다.
         SharedMap<String, Object> replyMap;
         try {
             validator.required(etx);
@@ -115,8 +116,7 @@ public final class WalletFlowSvc {
             replyMap = WalletResult.of(failure, trace);
         }
 
-        // 접수 이력이 있는 요청은 업무 거절도 완료 결과로 기록한다.
-        loader.close(etx, replyMap);
+        afterResponse.accept(loader.complete(etx, replyMap));
 
         logger.info("응답: action={}, walletId={}, resultCd={}, trace={}",
                 action, etx.getWalletId(), replyMap.getString("resultCd"), trace);

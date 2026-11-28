@@ -1,6 +1,7 @@
 package kr.tx24.wx.api.ctx;
 
 import kr.tx24.inet.mapper.Autowired;
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletPolicy;
@@ -10,14 +11,15 @@ import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 import java.security.MessageDigest;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.UUID;
 
 /**
  * 요청 본문과 API 요청 이력을 컨텍스트에 적재한다.
  *
- * <p>OPL_API의 {@code EwalletContextLoader}와 같은 자리다. 접수 이력을 남기지 못하면 업무를
- * 시작하지 않고, 완료 이력을 남기지 못해도 **이미 확정된 업무 결과는 바꾸지 않는다.**</p>
+ * <p>접수 시각과 거래가 참조할 이력 ID를 준비한다. 이력은 응답 종료 뒤 한 번 삽입한다.</p>
  */
 public final class WalletContextLoader {
 
@@ -32,59 +34,54 @@ public final class WalletContextLoader {
     }
 
     /**
-     * 요청 본문을 읽고 접수 이력을 남긴다.
-     *
-     * <p>본문 해시를 이력에 남기려면 본문을 먼저 읽어야 하므로 두 처리를 한 단계로 둔다.
-     * 이력 저장이 실패하면 업무를 진행하지 않는다.</p>
+     * 요청 본문을 읽고 나중에 저장할 접수 시각, 요청 해시와 이력 ID를 준비한다.
      */
     public void open(WalletContext etx, InputStream body) {
 
         try {
+            LocalDateTime receivedAt = DateUtils.getDate();
             byte[] bytes = body.readNBytes(WalletPolicy.FRAME + 1);
             if (bytes.length > WalletPolicy.FRAME) {
                 throw new WalletException("W001", "요청 본문이 8,192바이트를 초과했습니다.");
             }
 
             etx.setBody(bytes);
-            etx.setIo(SharedMap.<String, Object>of()
+            etx.getIo()
                     .add("ioId", UUID.randomUUID().toString().replace("-", ""))
-                    .add("walletId", etx.getWalletId())
-                    .add("keyHash", etx.getKeyHash())
-                    .add("phase", "received")
+                    .add("regDate", Timestamp.valueOf(receivedAt))
+                    .add("regDay", Integer.parseInt(DateUtils.toString(receivedAt.toLocalDate())))
                     .add("apiCode", etx.getAction().equals("payout") ? "transfer" : etx.getAction())
                     .add("requestHash", HexFormat.of().formatHex(
-                            MessageDigest.getInstance("SHA-256").digest(bytes))));
-
-            ledger.recordIo(etx.getIo(), etx.getTrace());
+                            MessageDigest.getInstance("SHA-256").digest(bytes)));
         } catch (WalletException refused) {
             throw refused;
         } catch (Exception failure) {
-            logger.error("API 요청 접수 이력 저장 실패, 업무를 진행하지 않는다: action={}, trace={}",
+            logger.error("API 요청 이력 준비 실패: action={}, trace={}",
                     etx.getAction(), etx.getTrace(), failure);
             throw new WalletException("W999", "API 요청 이력을 확인해 주세요.", failure);
         }
     }
 
     /**
-     * 완료 이력을 남긴다.
-     *
-     * <p>저장이 실패해도 업무 결과를 바꾸지 않는다. 이력 행은 접수로 남아 운영자가 확인한다.
-     * 종전에는 이 실패가 성공한 송금까지 {@code W999}로 바꿨다.</p>
+     * 응답 종료 뒤 저장할 이력 작업을 준비한다. 본문과 인증 키는 작업에 넘기지 않는다.
      */
-    public void close(WalletContext etx, SharedMap<String, Object> replyMap) {
+    public Runnable complete(WalletContext etx, SharedMap<String, Object> replyMap) {
 
-        if (etx.getIo() == null) return;
+        SharedMap<String, Object> ioMap = etx.getIo();
+        String                  trace = etx.getTrace();
+        ioMap.put("resultCd", replyMap.getString("resultCd"));
+        ioMap.put("resultMsg", message(replyMap));
+        return () -> record(ioMap, trace);
+    }
+
+    /** 응답이 종료된 고객사 요청의 이력 한 건을 저장한다. */
+    private void record(SharedMap<String, Object> ioMap, String trace) {
 
         try {
-            etx.getIo().put("phase", "completed");
-            etx.getIo().put("resultCd", replyMap.getString("resultCd"));
-            etx.getIo().put("resultMsg", message(replyMap));
-
-            ledger.recordIo(etx.getIo(), etx.getTrace());
+            ledger.recordIo(ioMap, trace);
         } catch (Exception failure) {
-            logger.error("API 요청 완료 이력 저장 실패, 업무 결과는 그대로 반환한다: action={}, ioId={}, resultCd={}, trace={}",
-                    etx.getAction(), etx.getIo().getString("ioId"), replyMap.getString("resultCd"),
-                    etx.getTrace(), failure);
+            logger.error("API 요청 완료 이력 저장 실패: action={}, ioId={}, resultCd={}, trace={}",
+                    ioMap.getString("apiCode"), ioMap.getString("ioId"), ioMap.getString("resultCd"), trace, failure);
         }
     }
 

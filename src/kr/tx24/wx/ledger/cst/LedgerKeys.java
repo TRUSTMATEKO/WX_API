@@ -19,6 +19,12 @@ public final class LedgerKeys {
      */
     public static final String WEBHOOK_QUEUE           = "WX:TASK:HOOK";
 
+    /** 송금 복구 큐. 멤버는 거래번호이고 점수는 다음 조회 가능 시각이다. */
+    public static final String TRANSFER_RECOVERY_QUEUE = "WX:TRANSFER:RECOVERY";
+
+    /** 복구 큐 누락 확인을 여러 WX_API 인스턴스에서 동시에 실행하지 않도록 한다. */
+    public static final String TRANSFER_RECOVERY_SCAN = "WX:TRANSFER:RECOVERY:SCAN";
+
     private LedgerKeys() {
 
     }

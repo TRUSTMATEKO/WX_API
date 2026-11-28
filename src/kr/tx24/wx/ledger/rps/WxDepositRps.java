@@ -12,7 +12,6 @@ import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
-import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.wx.ledger.enm.LedgerCode;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.api.WalletConfig;
@@ -1014,29 +1013,12 @@ public final class WxDepositRps {
     /** 입금·잔액 조정 원장에 기록할 은행 표시명을 잠근 모계좌의 설정 버전으로 읽는다. */
     private static String hqBankName(Connection db, SharedMap<String, Object> bankMap) throws SQLException {
 
-        String  hqId           = bankMap.getString("id");
-        String  cacheKey       = "WX:API:REFERENCE:HQ_ACCNT:BANK_NAME:" + hqId
-                + ":" + bankMap.getLong("settingRev");
-        boolean cacheAvailable = true;
-        try {
-            String name = RedisTextUtils.get(cacheKey);
-            if (name != null) {
-                return name;
-            }
-        } catch (RuntimeException unavailable) {
-            cacheAvailable = false;
-        }
-
-        String name = rows(db, "SELECT bankName FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE", hqId)
-                .get(0).getString("bankName");
-        if (cacheAvailable) {
-            try {
-                RedisTextUtils.setNx(cacheKey, name, WalletPolicy.REFERENCE_CACHE_SECONDS);
-            } catch (RuntimeException unavailable) {
-                // 잠근 모계좌에서 읽은 은행 표시명을 사용한다.
-            }
-        }
-        return name;
+        String hqId = bankMap.getString("id");
+        String key  = "WX:API:REFERENCE:HQ_ACCNT:BANK_ROW:" + hqId + ":" + bankMap.getLong("settingRev");
+        SharedMap<String, Object> nameMap = WxDatabaseRps.fetchRow(key, WalletPolicy.REFERENCE_CACHE_SECONDS,
+                () -> WxDatabaseRps.select(db, "SELECT bankName FROM WX.HQ_ACCNT WHERE id=? FOR UPDATE", hqId));
+        if (nameMap == null) throw new SQLException("잠근 모계좌를 찾을 수 없습니다.");
+        return nameMap.getString("bankName");
     }
 
     /**

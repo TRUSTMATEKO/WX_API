@@ -13,10 +13,12 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
 
 import kr.tx24.lib.lang.DateUtils;
+import kr.tx24.lib.db.Create;
 import kr.tx24.lib.db.DBUtils;
+import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.lang.MaskUtils;
 import kr.tx24.lib.map.SharedMap;
-import kr.tx24.lib.redis.RedisTextUtils;
+import kr.tx24.lib.redis.RedisUtils;
 import kr.tx24.wx.ledger.enm.LedgerCode;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.ledger.utils.LedgerIp;
@@ -31,6 +33,12 @@ public final class WxMerchantRps {
     private static final Logger logger = LoggerFactory.getLogger(WxMerchantRps.class);
 
     private static final DateTimeFormatter BANK_TIME = DateTimeFormatter.ofPattern("uuuuMMddHHmmss").withResolverStyle(ResolverStyle.STRICT);
+    private static final String AUTH_CACHE_PREFIX = "WX:API:AUTH:";
+    private static final long AUTH_CACHE_SECONDS = 300;
+    private static final String ACTIVE_KEY = """
+            K.status='사용' AND M.status='사용'
+            AND (K.expiresAt IS NULL OR K.expiresAt>NOW()) AND K.revokedAt IS NULL
+            """;
 
     private WxMerchantRps() {
 
@@ -73,12 +81,14 @@ public final class WxMerchantRps {
             throw new LedgerEx(LedgerCode.UNAUTHENTICATED);
         }
 
+        String action = inMap.getString("operation");
+        if (action.equals("authorize")) return authorize(db, inMap, keyHash);
+
         List<SharedMap<String, Object>> keysList = rows(db, """
                 SELECT K.idx,K.mchtId,K.walletId
                   FROM WX.WALLET_API_KEY K JOIN WX.MCHT M ON M.mchtId=K.mchtId
-                 WHERE K.keyHash=? AND K.status='사용' AND M.status='사용'
-                   AND (K.expiresAt IS NULL OR K.expiresAt>NOW()) AND K.revokedAt IS NULL
-                """, keyHash);
+                 WHERE K.keyHash=? AND
+                """ + ACTIVE_KEY, keyHash);
         if (keysList.size() != 1) {
             // 키 해시는 남기지 않는다. 사용 중인 키를 찾지 못했다는 사실만 남긴다.
             logger.info("사용 중인 API 키를 찾지 못해 거절: operation={}, clientIp={}, 조회={}건",
@@ -88,28 +98,22 @@ public final class WxMerchantRps {
 
         SharedMap<String, Object> keyMap   = keysList.get(0);
         String                    company  = keyMap.getString("mchtId");
-        byte[]                    clientIp = LedgerIp.address(inMap.getString("clientIp"));
+        String                    walletId = keyMap.getString("walletId");
 
         // 허용 IP는 키가 아니라 Wallet 의 설정이다. 키를 재발급해도 이 목록이 그대로 쓰인다.
         List<SharedMap<String, Object>> allowedList = rows(db, """
                 SELECT ip FROM WX.WALLET_API_IPS WHERE walletId=? AND status='사용'
-                """, keyMap.getString("walletId"));
-        if (clientIp == null || allowedList.isEmpty()
-                || allowedList.stream().map(rowMap -> rowMap.getString("ip"))
-                        .noneMatch(rule -> !rule.isBlank() && LedgerIp.matches(clientIp, rule))) {
-            logger.info("허용 IP가 아니어서 거절: mchtId={}, walletId={}, operation={}, clientIp={}, 등록={}건",
-                    company, keyMap.getString("walletId"), inMap.getString("operation"),
-                    inMap.getString("clientIp"), allowedList.size());
-            throw new LedgerEx(LedgerCode.FORBIDDEN);
-        }
+                """, walletId);
+        requireAllowedIp(inMap, keyMap, allowedList);
 
-        String                          walletId   = keyMap.getString("walletId");
-        List<SharedMap<String, Object>> walletList = rows(db, """
-                SELECT B.balance,B.available AS availableBalance,W.status,W.apiStatus,H.acq
-                  FROM WX.WALLET W JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
-                  LEFT JOIN WX.HQ_ACCNT H ON H.id=W.hqId
-                 WHERE W.id=? AND W.mchtId=? AND W.ownerType='MCHT'
-                """, walletId, company);
+        Retrieve walletQuery = new Retrieve("WX.WALLET W")
+                .columns("B.balance,B.available AS availableBalance,W.status,W.apiStatus")
+                .joinInner("WX.WALLET_BALANCE B", "B.walletId=W.id")
+                .where("W.id=? AND W.mchtId=? AND W.ownerType='MCHT'");
+        if (!action.equals("balance") && !action.equals("inquiry")) {
+            walletQuery.column("H.acq").joinLeftOuter("WX.HQ_ACCNT H", "H.id=W.hqId");
+        }
+        List<SharedMap<String, Object>> walletList = rows(db, walletQuery.build(), walletId, company);
         if (walletList.size() != 1) {
             logger.info("API 키에 연결된 고객사 Wallet을 찾을 수 없어 거절: mchtId={}, walletId={}, operation={}",
                     company, walletId, inMap.getString("operation"));
@@ -117,12 +121,9 @@ public final class WxMerchantRps {
         }
 
         SharedMap<String, Object> walletMap = walletList.get(0);
-        if (!walletMap.isEquals("status", "사용") || !walletMap.isEquals("apiStatus", "사용")) {
-            throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
-        }
+        requireWalletStatus(walletMap);
 
-        String action = inMap.getString("operation");
-        if (!action.equals("authorize") && !inMap.isEquals("walletId", walletId)) {
+        if (!inMap.isEquals("walletId", walletId)) {
             // 인증 때와 업무 때의 Wallet 이 다르다. 그 사이에 키 연결이 바뀐 것이다.
             logger.info("인증 후 Wallet 연결이 바뀌어 거절: mchtId={}, 인증={}, 현재={}, operation={}",
                     company, inMap.getString("walletId"), walletId, action);
@@ -130,9 +131,6 @@ public final class WxMerchantRps {
         }
 
         switch (action) {
-            case "authorize":
-                return SharedMap.<String, Object>of()
-                        .add("walletId", walletId);
             case "balance":
                 return SharedMap.<String, Object>of()
                         .add("balance", walletMap.getLong("balance"))
@@ -152,36 +150,129 @@ public final class WxMerchantRps {
         }
     }
 
-    /** /api/internal/wallet/io: 본문 원문과 인증 키를 저장하지 않고 접수·응답 시각을 기록한다. */
-    public static void recordIo(SharedMap<String,Object> inMap) throws SQLException {
+    /** 최초 인증은 키와 Wallet을 함께 읽고 사용 가능한 연결만 5분 동안 보관한다. */
+    private static SharedMap<String, Object> authorize(Connection db, SharedMap<String, Object> inMap, String keyHash)
+            throws SQLException {
 
-        String id = inMap.getString("ioId");
-        if (!id.matches("[a-f0-9]{32}") || !inMap.getString("keyHash").matches("[a-f0-9]{64}")) throw new LedgerEx(LedgerCode.INVALID);
-        try (Connection db= WxDatabaseRps.open()) {
-            int count;
-            if (inMap.isEquals("phase","received")) {
-                if (!java.util.Set.of("transfer","holder","inquiry","balance").contains(inMap.getString("apiCode"))
-                        || !inMap.getString("requestHash").matches("[a-f0-9]{64}")) {
-                    throw new LedgerEx(LedgerCode.INVALID);
-                }
-                count=WxDatabaseRps.update(db,"INSERT INTO WX.TRX_IO(id,mchtId,walletId,apiCode,apiKeyIdx,requestHash,regId,regDay)"
-                        +" SELECT ?,k.mchtId,k.walletId,?,k.idx,?,'WX_API',DATE_FORMAT(CURRENT_DATE(),'%Y%m%d')"
-                        +" FROM WX.WALLET_API_KEY k WHERE k.keyHash=? AND k.walletId=? AND k.status='사용' AND k.revokedAt IS NULL AND (k.expiresAt IS NULL OR k.expiresAt>NOW())",
-                        id,inMap.getString("apiCode"),inMap.getString("requestHash"),inMap.getString("keyHash"),inMap.getString("walletId"));
-            } else if (inMap.isEquals("phase","completed") && inMap.getString("resultCd").matches("[A-Z0-9]{1,24}") && inMap.getString("trackId").length()<=128) {
-                // 결과 문구는 길이로 거절하지 않고 열 길이로 자른다. 문구를 못 담는 것이
-                // 이력 한 건을 접수로 남기는 것보다 가볍다.
-                count=WxDatabaseRps.update(db,"UPDATE WX.TRX_IO i JOIN WX.WALLET_API_KEY k ON k.idx=i.apiKeyIdx"
-                        +" SET i.status='완료',i.udtDate=NOW(),i.resultCd=?,i.resultMsg=NULLIF(?,''),i.httpStatus=200,i.trackId=NULLIF(?,'')"
-                        +" WHERE i.id=? AND i.walletId=? AND k.keyHash=? AND i.status='접수'",
-                        inMap.getString("resultCd"),DBUtils.cut(inMap.getString("resultMsg"),128),
-                        inMap.getString("trackId"),id,inMap.getString("walletId"),inMap.getString("keyHash"));
-            } else {
-                throw new LedgerEx(LedgerCode.INVALID);
+        String cacheKey = AUTH_CACHE_PREFIX + keyHash;
+        WxDatabaseRps.RowQuery keyQuery = () -> WxDatabaseRps.select(db, """
+                SELECT K.idx,K.mchtId,K.walletId,W.status,W.apiStatus,B.walletId AS balanceWalletId
+                  FROM WX.WALLET_API_KEY K JOIN WX.MCHT M ON M.mchtId=K.mchtId
+                  LEFT JOIN WX.WALLET W ON W.id=K.walletId AND W.mchtId=K.mchtId AND W.ownerType='MCHT'
+                  LEFT JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
+                 WHERE K.keyHash=? AND
+                """ + ACTIVE_KEY, keyHash);
+        SharedMap<String, Object> cachedMap = WxDatabaseRps.fetchRow(cacheKey, AUTH_CACHE_SECONDS, keyQuery);
+        if (cachedMap == null) throw new LedgerEx(LedgerCode.UNAUTHENTICATED);
+
+        if (cachedMap.getLong("idx") > 0 && !cachedMap.isBlank("walletId")
+                && !cachedMap.isBlank("mchtId")) {
+            // 캐시 연결은 힌트로 사용한다. IP 조회와 같은 SQL에서 현재 키 및 Wallet의 사용 상태를 확인한다.
+            List<SharedMap<String, Object>> allowedList = rows(db, """
+                    SELECT I.ip
+                      FROM WX.WALLET_API_KEY K JOIN WX.MCHT M ON M.mchtId=K.mchtId
+                      JOIN WX.WALLET W ON W.id=K.walletId AND W.mchtId=K.mchtId AND W.ownerType='MCHT'
+                      JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
+                      LEFT JOIN WX.WALLET_API_IPS I ON I.walletId=W.id AND I.status='사용'
+                     WHERE K.idx=? AND K.keyHash=? AND K.walletId=? AND K.mchtId=?
+                       AND W.status='사용' AND W.apiStatus='사용' AND
+                    """ + ACTIVE_KEY, cachedMap.getLong("idx"), keyHash,
+                    cachedMap.getString("walletId"), cachedMap.getString("mchtId"));
+            if (!allowedList.isEmpty()) {
+                requireAllowedIp(inMap, cachedMap, allowedList);
+                return authorizedWallet(cachedMap);
             }
-            if (count!=1) throw new LedgerEx(LedgerCode.CONFLICT);
-            if (!db.getAutoCommit()) db.commit();
         }
+
+        // 현재 상태가 캐시와 다르면 기존 연결을 폐기하고 DB에서 거절 사유를 판정한다.
+        try {
+            RedisUtils.del(cacheKey);
+        } catch (RuntimeException unavailable) {
+            // 현재 요청에는 DB의 값을 사용한다.
+        }
+        List<SharedMap<String, Object>> keyList = keyQuery.select().getRows();
+        if (keyList.size() != 1) {
+            logger.info("사용 중인 API 키를 찾지 못해 거절: operation=authorize, clientIp={}, 조회={}건",
+                    inMap.getString("clientIp"), keyList.size());
+            throw new LedgerEx(LedgerCode.UNAUTHENTICATED);
+        }
+
+        SharedMap<String, Object> keyMap = keyList.get(0);
+        List<SharedMap<String, Object>> allowedList = rows(db, """
+                SELECT ip FROM WX.WALLET_API_IPS WHERE walletId=? AND status='사용'
+                """, keyMap.getString("walletId"));
+        requireAllowedIp(inMap, keyMap, allowedList);
+        if (keyMap.isBlank("balanceWalletId")) {
+            logger.info("API 키에 연결된 고객사 Wallet을 찾을 수 없어 거절: mchtId={}, walletId={}, operation=authorize",
+                    keyMap.getString("mchtId"), keyMap.getString("walletId"));
+            throw new LedgerEx(LedgerCode.KEY_WALLET_ERROR, "API 키의 Wallet 연결을 확인해 주세요.");
+        }
+        requireWalletStatus(keyMap);
+
+        return authorizedWallet(keyMap);
+    }
+
+    /** 고객사 응답 이력은 인증 시점의 고객사, Wallet과 키 행을 사용한다. */
+    private static SharedMap<String, Object> authorizedWallet(SharedMap<String, Object> keyMap) {
+
+        return SharedMap.<String, Object>of()
+                .add("walletId", keyMap.getString("walletId"))
+                .add("mchtId", keyMap.getString("mchtId"))
+                .add("idx", keyMap.getLong("idx"));
+    }
+
+    /** Wallet에 등록된 현재 IP 규칙으로 접속을 검사한다. */
+    private static void requireAllowedIp(SharedMap<String, Object> inMap, SharedMap<String, Object> keyMap,
+                                         List<SharedMap<String, Object>> allowedList) {
+
+        byte[] clientIp = LedgerIp.address(inMap.getString("clientIp"));
+        if (clientIp == null || allowedList.stream().map(rowMap -> rowMap.getString("ip"))
+                .noneMatch(rule -> !rule.isBlank() && LedgerIp.matches(clientIp, rule))) {
+            long registered = allowedList.stream().filter(rowMap -> !rowMap.isBlank("ip")).count();
+            logger.info("허용 IP가 아니어서 거절: mchtId={}, walletId={}, operation={}, clientIp={}, 등록={}건",
+                    keyMap.getString("mchtId"), keyMap.getString("walletId"), inMap.getString("operation"),
+                    inMap.getString("clientIp"), registered);
+            throw new LedgerEx(LedgerCode.FORBIDDEN);
+        }
+    }
+
+    /** Wallet과 API가 모두 사용 중이어야 한다. */
+    private static void requireWalletStatus(SharedMap<String, Object> walletMap) {
+
+        if (!walletMap.isEquals("status", "사용") || !walletMap.isEquals("apiStatus", "사용")) {
+            throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
+        }
+    }
+
+    /** 고객사 응답 종료 뒤 요청 이력을 완료 상태로 한 번 삽입한다. */
+    public static void recordIo(SharedMap<String, Object> inMap) {
+
+        if (!inMap.getString("ioId").matches("[a-f0-9]{32}")
+                || !java.util.Set.of("transfer", "holder", "inquiry", "balance").contains(inMap.getString("apiCode"))
+                || !inMap.getString("requestHash").matches("[a-f0-9]{64}")
+                || !inMap.getString("resultCd").matches("[A-Z0-9]{1,24}") || inMap.getString("trackId").length() > 128
+                || inMap.getLong("apiKeyIdx") <= 0 || inMap.isBlank("mchtId") || inMap.isBlank("walletId")) {
+            throw new LedgerEx(LedgerCode.INVALID);
+        }
+
+        SharedMap<String, Object> rowMap = SharedMap.<String, Object>of()
+                .add("id", inMap.getString("ioId"))
+                .add("mchtId", inMap.getString("mchtId"))
+                .add("walletId", inMap.getString("walletId"))
+                .add("apiCode", inMap.getString("apiCode"))
+                .add("apiKeyIdx", inMap.getLong("apiKeyIdx"))
+                .add("requestHash", inMap.getString("requestHash"))
+                .add("status", "완료")
+                .add("resultCd", inMap.getString("resultCd"))
+                .add("httpStatus", 200)
+                .add("regId", "WX_API")
+                .add("regDay", inMap.getInt("regDay"))
+                .add("regDate", inMap.get("regDate"))
+                .add("udtDate", DateUtils.getCurrentTimestamp());
+        if (!inMap.isBlank("resultMsg")) rowMap.put("resultMsg", DBUtils.cut(inMap.getString("resultMsg"), 128));
+        if (!inMap.isBlank("trackId")) rowMap.put("trackId", inMap.getString("trackId"));
+
+        if (new Create("WX.TRX_IO").record(rowMap).insert() != 1) throw new LedgerEx(LedgerCode.CONFLICT);
     }
 
     /**
@@ -191,7 +282,7 @@ public final class WxMerchantRps {
      * 고객사 주문번호 {@code trackId}와 거래일 {@code trxDay} 한 쌍으로 찾는다. 두 길 모두
      * 인증된 Wallet 범위 안에서만 찾으므로 다른 고객사의 거래가 나오지 않는다.</p>
      *
-     * <p>날짜는 접수일과 완료일 둘 다 맞춘다. 응답이 유실된 고객사는 완료일을 모르기 때문이다.</p>
+     * <p>주문번호 조회의 거래일은 송금 접수일(regDay)이다.</p>
      */
     private static SharedMap<String, Object> inquiry(Connection db, SharedMap<String, Object> inMap,
                                                       String company, String walletId) throws SQLException {
@@ -223,8 +314,7 @@ public final class WxMerchantRps {
             } catch (IllegalArgumentException | java.time.DateTimeException ex) {
                 throw new LedgerEx(LedgerCode.INVALID, "거래조회 요청번호와 거래일을 확인해 주세요.");
             }
-            foundList = rows(db, select + "T.trackId=? AND (T.regDay=? OR DATE_FORMAT(T.udtDate,'%Y%m%d')=?)",
-                    company, walletId, trackId, lookupDay, lookupDay);
+            foundList = rows(db, select + "T.regDay=? AND T.trackId=?", company, walletId, lookupDay, trackId);
         }
         if (foundList.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND);
 
@@ -264,32 +354,10 @@ public final class WxMerchantRps {
     /** 송금·예금주 조회 원장에 기록할 은행 표시명을 은행 코드로 읽는다. */
     static String bankName(Connection db, String bankCd) throws SQLException {
 
-        String  cacheKey       = "WX:API:REFERENCE:BANK:NAME:" + bankCd + ":0";
-        boolean cacheAvailable = true;
-        try {
-            String name = RedisTextUtils.get(cacheKey);
-            if (name != null) {
-                return name;
-            }
-        } catch (RuntimeException unavailable) {
-            cacheAvailable = false;
-        }
-
-        List<SharedMap<String, Object>> rowsList = rows(db,
-                "SELECT COALESCE(NULLIF(nickKr,''),nameKr) AS name FROM WX.BANK WHERE code=?", bankCd);
-        if (rowsList.isEmpty()) {
-            return "";
-        }
-
-        String name = rowsList.get(0).getString("name");
-        if (cacheAvailable) {
-            try {
-                RedisTextUtils.setNx(cacheKey, name, WalletPolicy.REFERENCE_CACHE_SECONDS);
-            } catch (RuntimeException unavailable) {
-                // 원장에서 읽은 은행 표시명을 사용한다.
-            }
-        }
-        return name;
+        String key = "WX:API:REFERENCE:BANK:ROW:" + bankCd;
+        SharedMap<String, Object> nameMap = WxDatabaseRps.fetchRow(key, WalletPolicy.REFERENCE_CACHE_SECONDS,
+                () -> WxDatabaseRps.select(db, "SELECT COALESCE(NULLIF(nickKr,''),nameKr) AS name FROM WX.BANK WHERE code=?", bankCd));
+        return nameMap == null ? "" : nameMap.getString("name");
     }
 
     /** 기관 전문에 회신된 지급일시가 유효한 달력 값인지 확인한다. */

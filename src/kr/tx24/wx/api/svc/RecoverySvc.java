@@ -26,10 +26,9 @@ public final class RecoverySvc {
     /** 원장에서 선점한 미결 송금을 한 건씩 확인한다. */
     public SharedMap<String, Object> recover(int limit, String trace) throws Exception {
 
-        int                             batchSize = Math.min(Math.max(limit, 1), WalletPolicy.RECOVERY_LIMIT);
-        List<SharedMap<String, Object>> rowsList  = ledger.pending(batchSize, trace);
+        int batchSize = Math.min(Math.max(limit, 1), WalletPolicy.RECOVERY_LIMIT);
 
-        // 본사 출금 재조회가 실패해도 이미 선점한 고객사 송금은 계속 처리한다.
+        // 본사 출금 재조회가 끝난 뒤 고객사 송금을 처리 직전에 한 건씩 선점한다.
         SharedMap<String, Object> hqMap;
         try {
             hqMap = new HqWithdrawSvc(ledger).recover(batchSize);
@@ -39,13 +38,20 @@ public final class RecoverySvc {
             hqMap = counts(0, 0, 0);
         }
 
-        if (rowsList.isEmpty()) {
-            return hqMap;
-        }
-
+        int checked  = 0;
         int settled  = 0;
         int requeued = 0;
-        for (SharedMap<String, Object> rowMap : rowsList) {
+        while (checked < batchSize) {
+            SharedMap<String, Object> rowMap;
+            try {
+                List<SharedMap<String, Object>> rowsList = ledger.pending(1, trace);
+                if (rowsList.isEmpty()) break;
+                rowMap = rowsList.get(0);
+            } catch (Exception failure) {
+                logger.warn("송금 복구 큐 조회 실패: type={}, trace={}", failure.getClass().getSimpleName(), trace);
+                break;
+            }
+            checked++;
             String trxId = rowMap.getString("trxId");
             try {
                 if (resolve(rowMap, trace)) {
@@ -60,9 +66,10 @@ public final class RecoverySvc {
             }
         }
 
-        logger.info("송금 재조회 결과: checked={}, settled={}, requeued={}, trace={}",
-                rowsList.size(), settled, requeued, trace);
-        return counts(rowsList.size() + hqMap.getInt("checked"), settled + hqMap.getInt("settled"), requeued + hqMap.getInt("requeued"));
+        if (checked > 0) {
+            logger.info("송금 재조회 결과: checked={}, settled={}, requeued={}, trace={}", checked, settled, requeued, trace);
+        }
+        return counts(checked + hqMap.getInt("checked"), settled + hqMap.getInt("settled"), requeued + hqMap.getInt("requeued"));
     }
 
     /** 작업기 주기에 입금 이후 보류된 모계좌 한 건을 새로운 기관 잔액으로 대조한다. */

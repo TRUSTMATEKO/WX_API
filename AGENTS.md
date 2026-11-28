@@ -17,6 +17,8 @@ Map 타입의 변수와 매개변수 이름은 `Map`, List 타입은 `List`로 �
 
 날짜·시간의 조회, 변환, 포맷에는 TX24_LIB의 `DateUtils`를 우선 사용한다. JVM과 데이터베이스의 기본 업무 시간대를 사용하며, 원장 거래일과 기록 시각은 같은 DB 시각에서 산정한다. 엄격한 전문·요청 날짜 검증과 경과 시간 측정에는 해당 동작을 보장하는 API를 사용한다.
 
+검색 폼의 첫 번째 날짜 조건은 업무 의미에 맞는 `YYYYMMDD` 정수형 일자 컬럼으로 조회한다. 등록일·접수일·수신일에는 `regDay`를 사용하고, 거래일·집계일은 해당 일자 컬럼을 사용한다. 날짜 단독 조회를 지원하도록 해당 일자 컬럼으로 시작하는 인덱스를 확인한다. `regDate` 같은 Timestamp 컬럼은 시각 표시·정렬 및 시각 범위를 명시적으로 조회하는 조건에 사용한다.
+
 NGINX와 TX24_HTTP가 전달한 단일 접속 IP는 WX의 MCHT_IP와 대조한다. HYPHEN 원본 패키지는 유지하며 시험 프로필에 연결하기 전 운영 요청을 닫는다. 고객사 웹훅은 이 프로세스가 보내지 않는다. `TRX_WEBHOOK` 에 적재하고 `WX:TASK:WEBHOOK` 큐에 id 를 올리면 WX_TASK 가 발송한다(OPL_API·OPL_TASK 와 같은 구조).
 
 고객사 송금 계약은 `docs/index.html`과 `docs/wallet-database.openapi.json`에 기록한다. 등록 IP 확인 후 Authorization 키로 HMAC-SHA256을 검증한다. 서명에는 서버에서 식별한 Wallet ID와 모든 지급 관련 요청값을 사용한다. 키 원문, checksum, 전체 계좌번호를 내부 점검 요청이나 로그에 남기지 않는다.

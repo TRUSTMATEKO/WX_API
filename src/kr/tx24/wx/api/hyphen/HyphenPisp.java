@@ -2,6 +2,7 @@ package kr.tx24.wx.api.hyphen;
 
 
 import kr.tx24.wx.api.utils.ExtCode;
+import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.lib.inter.INet;
 import kr.tx24.lib.lang.CommonUtils;
 import kr.tx24.lib.lang.DateUtils;
@@ -25,10 +26,26 @@ import java.time.LocalDateTime;
 import java.security.KeyFactory;
 import java.security.SecureRandom;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class HyphenPisp {
 
     private static final Logger logger = LoggerFactory.getLogger(HyphenPisp.class);
+
+    private static final ScheduledThreadPoolExecutor SOCKET_TIMEOUTS = socketTimeouts();
+
+    private static ScheduledThreadPoolExecutor socketTimeouts() {
+
+        ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, task -> {
+            Thread thread = new Thread(task, "wx-hyphen-timeout");
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
 
     private static final Charset HYPHEN_CHARSET      = Charset.forName("KSC5601");
     private static final String HYPHEN_REDIS_SEQ	= "WX:HYPHEN:";    //WX 는 모계좌별로 분리
@@ -157,7 +174,7 @@ public class HyphenPisp {
 
         byte[] request = head.get(data.get());
         logger.info("예금주 조회 전문 길이: {}", request.length);
-        byte[] response = execute(request);
+        byte[] response = execute(request, WalletPolicy.HOLDER_TIMEOUT_MILLIS);
 
 
         KRWHead resHead = new KRWHead(response);
@@ -231,7 +248,7 @@ public class HyphenPisp {
 
 
         byte[] request = head.get(data.get());
-        byte[] response = execute(request);
+        byte[] response = execute(request, WalletPolicy.TRANSFER_TIMEOUT_MILLIS);
 
         KRWHead resHead = new KRWHead(response);
         KRW0100100 resData = new KRW0100100(response);
@@ -448,10 +465,16 @@ public class HyphenPisp {
 
     public byte[] execute(byte[] request) {
 
+        return execute(request, 0);
+    }
+
+    private byte[] execute(byte[] request, int timeoutMillis) {
+
         long start = System.nanoTime();
 
         byte[] response = null;
         String phase = "INIT";
+        ScheduledFuture<?> timeout = null;
 
         // UUID 대신 SecureRandom 사용
         byte[] key = new byte[16];
@@ -459,10 +482,21 @@ public class HyphenPisp {
 
         try (Socket socket = new Socket()) {
 
+            if (timeoutMillis > 0) {
+                long remaining = TimeUnit.MILLISECONDS.toNanos(timeoutMillis) - (System.nanoTime() - start);
+                timeout = SOCKET_TIMEOUTS.schedule(() -> {
+                    try {
+                        socket.close();
+                    } catch (IOException failure) {
+                        logger.debug("기관 통신 제한시간 도달 후 소켓 종료 실패", failure);
+                    }
+                }, remaining, TimeUnit.NANOSECONDS);
+            }
+
             logger.info("hyphen send length : {}", request.length);
 
             socket.setTcpNoDelay(true);
-            socket.setSoTimeout(HYPHEN_READ_TIMEOUT);
+            socket.setSoTimeout(timeoutMillis > 0 ? timeoutMillis : HYPHEN_READ_TIMEOUT);
 
             phase = "CONNECT";
             socket.connect(new InetSocketAddress(host, port), HYPHEN_CONNECT_TIMEOUT);
@@ -487,6 +521,10 @@ public class HyphenPisp {
 
             phase = "DECRYPT";
             response = decrypt(key, body);
+            if (timeoutMillis > 0 && System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(timeoutMillis)) {
+                response = null;
+                throw new SocketTimeoutException("기관 통신 제한시간 초과");
+            }
 
         }catch (SocketTimeoutException e) {
             logger.info("{},{}",host,port);
@@ -502,6 +540,8 @@ public class HyphenPisp {
 
         }catch (Exception e) {
             logger.error("Hyphen 처리 중 예기치 않은 오류 발생 (단계: {})", phase, e);
+        } finally {
+            if (timeout != null) timeout.cancel(false);
         }
 
         if (response == null) {

@@ -58,12 +58,16 @@ public final class AuthorizeSvc {
         }
 
         SharedMap<String, Object> dataMap = replyMap.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
-        if (dataMap == null || dataMap.isBlank("walletId")) {
+        if (dataMap == null || dataMap.isBlank("walletId") || dataMap.isBlank("mchtId") || dataMap.getLong("idx") <= 0) {
             throw new WalletException("W999", "인증된 Wallet 응답을 확인해 주세요.");
         }
 
         // 이후 송금 서명과 거래 조회에는 인증 결과의 Wallet ID를 사용한다.
         etx.setWalletId(dataMap.getString("walletId"));
+        etx.setIo(SharedMap.<String, Object>of()
+                .add("walletId", etx.getWalletId())
+                .add("mchtId", dataMap.getString("mchtId"))
+                .add("apiKeyIdx", dataMap.getLong("idx")));
         logger.debug("Wallet 인증 완료: action={}, walletId={}, trace={}",
                 etx.getAction(), etx.getWalletId(), etx.getTrace());
     }

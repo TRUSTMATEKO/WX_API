@@ -13,7 +13,8 @@ import kr.tx24.wx.api.utils.NotificationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** 고객사 송금을 접수하고 기관 응답에 따라 원장을 확정한다. */
 public final class TransferSvc {
@@ -93,7 +94,7 @@ public final class TransferSvc {
     private SharedMap<String, Object> send(WalletContext etx, SharedMap<String, Object> acceptedMap, String trxId,
                                             long amount) {
 
-        AtomicBoolean referenceRecorded = new AtomicBoolean(false);
+        AtomicReference<Long> institutionStart = new AtomicReference<>();
         try {
             UpstreamSvc               channel    = UpstreamSvc.open(upstream(acceptedMap));
             SharedMap<String, Object> requestMap = SharedMap.<String, Object>of()
@@ -106,10 +107,10 @@ public final class TransferSvc {
             // 은행에 쓰기 직전에 원거래번호를 저장해야 응답이 끊겨도 같은 거래를 조회할 수 있다.
             return channel.transfer(requestMap, acqTrxId -> {
                 ledger.recordAcq(trxId, acqTrxId, etx.getTrace());
-                referenceRecorded.set(true);
+                institutionStart.set(System.nanoTime());
             });
         } catch (Exception failure) {
-            if (referenceRecorded.get()) {
+            if (institutionStart.get() != null) {
                 // 원거래번호 기록 후에는 기관 수신 여부를 단정할 수 없어 재조회로 넘긴다.
                 logger.error("기관 전송 후 예외, 결과를 미확인으로 둔다: trxId={}, trace={}",
                         trxId, etx.getTrace(), failure);
@@ -124,6 +125,13 @@ public final class TransferSvc {
             return SharedMap.<String, Object>of()
                     .add("acqResultCd", WalletPolicy.NOT_SENT)
                     .add("acqResultMsg", "기관 전송 전 오류로 처리하지 못했습니다.");
+        } finally {
+            Long start = institutionStart.get();
+            if (start != null) {
+                logger.info("Wallet API 소요 시간: action=payout, stage=institution, env={}, trxId={}, elapsedMs={}, trace={}",
+                        WalletConfig.upstreamEnv(), trxId, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
+                        etx.getTrace());
+            }
         }
     }
 

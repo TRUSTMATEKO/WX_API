@@ -29,15 +29,16 @@ final class CooconHolder implements HolderProvider {
     @Override
     public SharedMap<String, Object> holder(String bank, String account) throws IOException, InterruptedException {
 
-        JsonNode reply = inquire(bank, account);
-        if ("XXXX".equals(reply.path("RESP_CD").asText())) reply = inquire(bank, account);
+        long     deadline = HolderHttp.deadline();
+        JsonNode reply    = inquire(bank, account, deadline);
+        if ("XXXX".equals(reply.path("RESP_CD").asText())) reply = inquire(bank, account, deadline);
 
         String code = reply.path("RESP_CD").asText("");
         return "0000".equals(code) ? HolderHttp.result(code, "정상처리", reply.path("RCV_ACCT_NM").asText(""))
                 : HolderHttp.result(code, reply.path("RESP_MSG").asText(""), "");
     }
 
-    private JsonNode inquire(String bank, String account) throws IOException, InterruptedException {
+    private JsonNode inquire(String bank, String account, long deadline) throws IOException, InterruptedException {
 
         SharedMap<String, Object> requestMap = SharedMap.<String, Object>of()
                 .add("SECR_KEY", key)
@@ -48,7 +49,7 @@ final class CooconHolder implements HolderProvider {
                 .add("RCV_BNK_CD", bank)
                 .add("RCV_ACCT_NO", account)
                 .add("TRSC_AMT", "1");
-        HttpResponse<String> response = HolderHttp.post(target, requestMap.toJson());
+        HttpResponse<String> response = HolderHttp.post(target, requestMap.toJson(), deadline);
         JsonNode reply = HolderHttp.json(response.body());
         if (response.statusCode() / 100 != 2 && "0000".equals(reply.path("RESP_CD").asText())) {
             throw new IOException("COOCON 응답 상태 오류");

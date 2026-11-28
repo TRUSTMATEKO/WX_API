@@ -18,6 +18,12 @@ public final class WalletPolicy {
     /** 원장에서 읽은 참조 설정의 고정 Redis 만료 시간. */
     public static final long REFERENCE_CACHE_SECONDS = 600L;
 
+    /** 예금주 조회 기관 통신에 연결과 재시도를 포함해 허용하는 시간이다. */
+    public static final int HOLDER_TIMEOUT_MILLIS = 15_000;
+
+    /** 송금 전문의 연결과 응답에 허용하는 전체 기관 통신 시간이다. */
+    public static final int TRANSFER_TIMEOUT_MILLIS = 30_000;
+
     /** 기관 전문이 응답 없이 끝난 경우의 코드. HyphenPisp가 요청 전문에 심어 돌려준다. */
     public static final String NO_RESPONSE = "X000";
 

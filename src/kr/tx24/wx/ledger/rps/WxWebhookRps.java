@@ -68,6 +68,7 @@ public final class WxWebhookRps {
      * 그것은 오류가 아니다. 웹훅을 쓰지 않는 Wallet이다.</p>
      *
      * @param transferMap 확정 결과. {@code walletId}·{@code trxId}가 있어야 한다
+     * @param postedAt 원장 반영 시각. 별도 반영 시각이 없으면 수신처 확인 후 DB 시각을 읽는다.
      * @return 적재한 수신처 건수
      */
     static int enqueue(Connection db, SharedMap<String, Object> transferMap, String eventType,
@@ -91,34 +92,38 @@ public final class WxWebhookRps {
             return 0;
         }
 
+        if (postedAt == null) postedAt = WxPostingRps.postingTime(db);
+
         String       dedupKey   = trxId + ":" + eventType;
         String       payload    = WxPostingRps.encryptForLedger(JacksonUtils.get().toJson(body(transferMap, eventType, postedAt)));
         int          day        = WxPostingRps.businessDay(postedAt);
-        int          stored     = 0;
         List<String> queuedList = new java.util.ArrayList<>();
 
         for (SharedMap<String, Object> hookMap : hooksList) {
             String hookId = IDUtils.getUnique("W");
-            // 같은 수신처에 같은 이벤트를 두 번 쌓지 않는다. 재확정은 조용히 넘어간다.
-            int changed = update(db, """
-                    INSERT INTO WX.TRX_WEBHOOK(id,mchtId,walletId,hookIdx,trxId,eventType,dedupKey,endpoint,
-                                               payloadEnc,status,generation,attemptCnt,regId,regDay,regDate)
-                    VALUES(?,?,?,?,?,?,?,?,?,'대기',0,0,'WX_API',?,?)
-                    ON DUPLICATE KEY UPDATE id=id
-                    """,
-                    hookId, transferMap.get("mchtId"), walletId, hookMap.getLong("idx"),
-                    trxId, eventType, dedupKey, hookMap.getString("endpoint"),
-                    payload, day, postedAt);
-            stored += changed;
-            // 새로 적재한 건만 발송 큐에 올린다. 중복(ON DUPLICATE)은 이미 큐를 지나간 건이다.
-            if (changed == 1) queuedList.add(hookId);
+            long hookIdx = hookMap.getLong("idx");
+            try {
+                update(db, """
+                        INSERT INTO WX.TRX_WEBHOOK(id,mchtId,walletId,hookIdx,trxId,eventType,dedupKey,endpoint,
+                                                   payloadEnc,status,generation,attemptCnt,regId,regDay,regDate)
+                        VALUES(?,?,?,?,?,?,?,?,?,'대기',0,0,'WX_API',?,?)
+                        """, hookId, transferMap.get("mchtId"), walletId, hookIdx, trxId, eventType, dedupKey,
+                        hookMap.getString("endpoint"), payload, day, postedAt);
+            } catch (SQLException failure) {
+                // 동일 수신처·이벤트가 이미 적재된 경우만 건너뛴다. ID 충돌 등 다른 오류는 전파한다.
+                if (failure.getErrorCode() != 1062 || rows(db, """
+                        SELECT id FROM WX.TRX_WEBHOOK WHERE hookIdx=? AND dedupKey=? LOCK IN SHARE MODE
+                        """, hookIdx, dedupKey).isEmpty()) throw failure;
+                continue;
+            }
+            queuedList.add(hookId);
         }
         // 큐 등록은 커밋 뒤에 한다. 커밋 전에 올리면 작업기가 아직 보이지 않는 행을 집어 버린다.
         // 그래서 적재한 id 만 결과에 담아 두고, 호출자가 커밋한 다음 publish 로 올린다.
         if (!queuedList.isEmpty()) transferMap.put(QUEUED, List.copyOf(queuedList));
         logger.info("웹훅 발송 대기 적재: trxId={}, eventType={}, 수신처={}건, 적재={}건",
-                trxId, eventType, hooksList.size(), stored);
-        return stored;
+                trxId, eventType, hooksList.size(), queuedList.size());
+        return queuedList.size();
     }
 
     /**

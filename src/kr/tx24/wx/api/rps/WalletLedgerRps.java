@@ -1,9 +1,14 @@
 package kr.tx24.wx.api.rps;
 
+import java.util.concurrent.TimeUnit;
+
 import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.map.SharedMap;
+import kr.tx24.lib.redis.RedisTextUtils;
+import kr.tx24.lib.redis.RedisUtils;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletPolicy;
+import kr.tx24.wx.config.InternalApiConfig;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.ledger.rps.WxDepositRps;
 import kr.tx24.wx.ledger.rps.WxHealthRps;
@@ -23,6 +28,9 @@ import java.util.List;
 public final class WalletLedgerRps {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletLedgerRps.class);
+
+    private static final String HOLDER_CONFIG_CACHE_PREFIX = "WX:API:REFERENCE:HOLDER:";
+    private static final long   HOLDER_CONFIG_CACHE_SECONDS = 600L;
 
     private final HqWithdrawRps withdrawals = new HqWithdrawRps();
 
@@ -86,10 +94,16 @@ public final class WalletLedgerRps {
         return merchant(inMap, trace);
     }
 
-    /** API 요청 이력: 접수와 완료 시점을 기록한다. 본문 원문과 키는 저장하지 않는다. */
+    /** 고객사 응답이 종료된 뒤 접수와 결과를 이력 한 건으로 기록한다. */
     public void recordIo(SharedMap<String, Object> ioMap, String trace) throws Exception {
 
-        WxMerchantRps.recordIo(ioMap);
+        long start = System.nanoTime();
+        try {
+            WxMerchantRps.recordIo(ioMap);
+        } finally {
+            logger.info("Wallet API 소요 시간: operation=io, stage=completed, elapsedMs={}, trace={}",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
+        }
     }
 
     /**
@@ -100,11 +114,15 @@ public final class WalletLedgerRps {
      */
     public void recordAcq(String trxId, String acqTrxId, String trace) {
 
+        long start = System.nanoTime();
         try {
             WxTransferRps.recordAcq(trxId, acqTrxId);
             logger.info("기관 원거래번호 기록: trxId={}, acqTrxId={}, trace={}", trxId, acqTrxId, trace);
         } catch (Exception failure) {
             throw new IllegalStateException("기관 원거래번호를 기록하지 못해 송금을 중단합니다.", failure);
+        } finally {
+            logger.info("Wallet API 소요 시간: operation=transfer/recordAcq, stage=ledger, elapsedMs={}, trace={}",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
         }
     }
 
@@ -126,13 +144,42 @@ public final class WalletLedgerRps {
         return WxTransferRps.expireUnsent(trxId);
     }
 
-    /** 모든 고객사가 공유하는 예금주 조회 기관의 설정 한 행을 읽는다. */
-    public SharedMap<String, Object> holderConfig() {
+    /** 예금주 조회 기관 설정을 환경과 설정 버전별로 10분간 암호문 그대로 보관한다. */
+    public SharedMap<String, Object> holderConfig(String env) {
+
+        String version;
+        try {
+            version = RedisTextUtils.get(InternalApiConfig.VERSION_KEY);
+            if (version != null) {
+                SharedMap<String, Object> cachedMap = RedisUtils.fetchRow(HOLDER_CONFIG_CACHE_PREFIX + env + ":" + version,
+                        holderConfigQuery().where("apiEnv", env).where("apiConfigVersion", version), HOLDER_CONFIG_CACHE_SECONDS);
+                if (cachedMap != null && cachedMap.isEquals("apiEnv", env)
+                        && version.equals(cachedMap.getString("apiConfigVersion"))) return cachedMap;
+            }
+        } catch (RuntimeException unavailable) {
+            return holderConfigQuery().select().getRow(0);
+        }
+
+        SharedMap<String, Object> configMap = holderConfigQuery().select().getRow(0);
+        if (configMap != null && configMap.isEquals("apiEnv", env)) {
+            String loadedVersion = configMap.getString("apiConfigVersion");
+            try {
+                if (version == null) RedisTextUtils.setNx(InternalApiConfig.VERSION_KEY, loadedVersion);
+                RedisUtils.setNx(HOLDER_CONFIG_CACHE_PREFIX + env + ":" + loadedVersion, configMap, HOLDER_CONFIG_CACHE_SECONDS);
+            } catch (RuntimeException unavailable) {
+                // Redis에 저장하지 못해도 이번 요청은 DB에서 읽은 설정으로 처리한다.
+            }
+        }
+        return configMap;
+    }
+
+    /** 예금주 조회 기관 설정과 캐시 버전을 같은 행에서 읽는다. */
+    private static Retrieve holderConfigQuery() {
 
         return new Retrieve("WX.CONFIG")
-                .columns("apiEnv,holderAcq,holderOrgCode,holderBankCd,holderKey1Enc,holderKey2Enc,holderSeed,holderIvEnc")
-                .where("id", 1)
-                .select().getRow(0);
+                .columns("apiConfigVersion,apiEnv,holderAcq,holderOrgCode,holderBankCd,holderKey1Enc,"
+                        + "holderKey2Enc,holderSeed,holderIvEnc")
+                .where("id", 1);
     }
 
     /**
@@ -288,6 +335,8 @@ public final class WalletLedgerRps {
     private static SharedMap<String, Object> merchant(SharedMap<String, Object> inMap, String trace) {
 
         String operation = inMap.getString("operation");
+        if (trace != null) inMap.put("traceId", trace);
+        long start = System.nanoTime();
         try {
             return ok(WxMerchantRps.query(inMap));
         } catch (LedgerEx refused) {
@@ -299,6 +348,9 @@ public final class WalletLedgerRps {
                     operation, failure.getClass().getSimpleName(), trace);
             logger.debug("원장 조회 예외 상세: operation={}, trace={}", operation, trace, failure);
             return error("TX500", "원장 응답을 확인해 주세요.");
+        } finally {
+            logger.info("Wallet API 소요 시간: operation={}, stage=ledger, elapsedMs={}, trace={}",
+                    operation, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
         }
     }
 
@@ -309,6 +361,7 @@ public final class WalletLedgerRps {
      */
     private static SharedMap<String, Object> ledger(String operation, String trace, Work work) {
 
+        long start = System.nanoTime();
         try {
             return ok(work.run());
         } catch (LedgerEx refused) {
@@ -320,6 +373,9 @@ public final class WalletLedgerRps {
                     operation, failure.getClass().getSimpleName(), trace);
             logger.debug("원장 처리 예외 상세: operation={}, trace={}", operation, trace, failure);
             return error("TX503", "내부 요청을 처리하지 못했습니다.");
+        } finally {
+            logger.info("Wallet API 소요 시간: operation={}, stage=ledger, elapsedMs={}, trace={}",
+                    operation, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
         }
     }
 

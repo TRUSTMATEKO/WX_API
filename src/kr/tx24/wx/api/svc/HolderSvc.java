@@ -1,5 +1,7 @@
 package kr.tx24.wx.api.svc;
 
+import java.util.concurrent.TimeUnit;
+
 import kr.tx24.inet.mapper.Autowired;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.map.TypeRegistry;
@@ -41,7 +43,7 @@ public final class HolderSvc {
 
         String env = WalletConfig.upstreamEnv();
         HolderProvider provider = "test".equals(env) ? HolderSvc::testHolder
-                : HolderProvider.open(ledger.holderConfig(), env);
+                : HolderProvider.open(ledger.holderConfig(env), env);
 
         SharedMap<String, Object> receiptMap;
         try {
@@ -65,6 +67,7 @@ public final class HolderSvc {
                 env, trxId, acceptedMap.getString("bankCd"), acceptedMap.getLong("feeAmt"), etx.getTrace());
 
         SharedMap<String, Object> repliedMap;
+        long institutionStart = System.nanoTime();
         try {
             repliedMap = provider.holder(acceptedMap.getString("bankCd"), acceptedMap.getString("accntNo"));
         } catch (Exception failure) {
@@ -74,6 +77,9 @@ public final class HolderSvc {
             repliedMap = SharedMap.<String, Object>of()
                     .add("acqResultCd", WalletPolicy.NO_RESPONSE)
                     .add("acqResultMsg", "통신장애, 다시 조회해 주세요.");
+        } finally {
+            logger.info("Wallet API 소요 시간: action=holder, stage=institution, env={}, trxId={}, elapsedMs={}, trace={}",
+                    env, trxId, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - institutionStart), etx.getTrace());
         }
 
         // 기관 성공 코드라도 이름이 비어 있으면 원장에 불일치로 기록한다.

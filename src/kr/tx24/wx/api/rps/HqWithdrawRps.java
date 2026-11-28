@@ -16,7 +16,7 @@ import kr.tx24.lib.lang.CommonUtils;
 import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
-import kr.tx24.lib.redis.RedisTextUtils;
+import kr.tx24.wx.ledger.rps.WxDatabaseRps;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.Acquirer;
@@ -242,32 +242,10 @@ public final class HqWithdrawRps {
     /** 과금 출금의 통장 표시명을 고객사 설정 버전으로 읽는다. */
     private static String merchantName(DBTrx tx, String mchtId, long revision) throws SQLException {
 
-        String  cacheKey       = "WX:API:REFERENCE:MCHT:NAME:" + mchtId + ":" + revision;
-        boolean cacheAvailable = true;
-        try {
-            String name = RedisTextUtils.get(cacheKey);
-            if (name != null) {
-                return name;
-            }
-        } catch (RuntimeException unavailable) {
-            cacheAvailable = false;
-        }
-
-        SharedMap<String, Object> rowMap = tx.select("SELECT name FROM WX.MCHT WHERE mchtId=? AND editRev=?",
-                mchtId, revision).getRow(0);
-        if (rowMap == null) {
-            return null;
-        }
-
-        String name = rowMap.getString("name");
-        if (cacheAvailable) {
-            try {
-                RedisTextUtils.setNx(cacheKey, name, WalletPolicy.REFERENCE_CACHE_SECONDS);
-            } catch (RuntimeException unavailable) {
-                // 원장에서 읽은 고객사명을 사용한다.
-            }
-        }
-        return name;
+        String key = "WX:API:REFERENCE:MCHT:ROW:" + mchtId + ":" + revision;
+        SharedMap<String, Object> nameMap = WxDatabaseRps.fetchRow(key, WalletPolicy.REFERENCE_CACHE_SECONDS,
+                () -> tx.select("SELECT name FROM WX.MCHT WHERE mchtId=? AND editRev=?", mchtId, revision));
+        return nameMap == null ? null : nameMap.getString("name");
     }
 
     /** 기관 전문 쓰기 직전에만 호출한다. 접수 취소와 송신의 경합은 조건부 갱신으로 가른다. */

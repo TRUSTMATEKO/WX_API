@@ -6,11 +6,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
 import kr.tx24.lib.redis.RedisUtils;
+import kr.tx24.wx.api.WalletPolicy;
 
 /** 예금주 조회용 JSON 통신과 기관 전문번호 발급을 처리한다. */
 final class HolderHttp {
@@ -31,14 +36,33 @@ final class HolderHttp {
         return 1 + (sequence - 1) % 949999;
     }
 
-    static HttpResponse<String> post(URI target, String body) throws IOException, InterruptedException {
+    static long deadline() {
 
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WalletPolicy.HOLDER_TIMEOUT_MILLIS);
+    }
+
+    static HttpResponse<String> post(URI target, String body, long deadline) throws IOException, InterruptedException {
+
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) throw new HttpTimeoutException("예금주 조회 기관 응답 시간 초과");
         HttpRequest request = HttpRequest.newBuilder(target)
-                              .timeout(Duration.ofSeconds(30))
+                              .timeout(Duration.ofNanos(remaining))
                               .header("Content-Type", "application/json; charset=utf-8")
                               .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                               .build();
-        return CLIENT.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        var response = CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        try {
+            return response.get(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException timeout) {
+            response.cancel(true);
+            throw new HttpTimeoutException("예금주 조회 기관 응답 시간 초과");
+        } catch (InterruptedException interrupted) {
+            response.cancel(true);
+            throw interrupted;
+        } catch (ExecutionException failure) {
+            if (failure.getCause() instanceof IOException ioFailure) throw ioFailure;
+            throw new IOException("예금주 조회 기관 통신 오류", failure.getCause());
+        }
     }
 
     static JsonNode json(String body) throws IOException {

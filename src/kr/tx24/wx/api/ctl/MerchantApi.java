@@ -3,6 +3,9 @@ package kr.tx24.wx.api.ctl;
 import kr.tx24.lib.map.SharedMap;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import io.netty.channel.ChannelHandlerContext;
 import kr.tx24.inet.mapper.Autowired;
@@ -23,6 +26,12 @@ import org.slf4j.MDC;
 public final class MerchantApi {
 
     private static final Logger logger = LoggerFactory.getLogger(MerchantApi.class);
+
+    private static final ExecutorService IO_WRITER = Executors.newFixedThreadPool(2, task -> {
+            Thread thread = new Thread(task, "wx-api-io-writer");
+            thread.setDaemon(true);
+            return thread;
+        });
 
     static {
         // INet Router가 수신 포트를 열기 전에 컨트롤러를 초기화한다.
@@ -97,15 +106,26 @@ public final class MerchantApi {
         }
 
         // 내부 로그 상관용 번호다. 고객사가 보낸 값은 받지 않는다.
-        String trace = MDC.get("traceId");
-        if (trace == null || !trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
+        String mdcTrace = MDC.get("traceId");
+        String trace    = mdcTrace != null && mdcTrace.matches("[A-Za-z0-9]{8}") ? mdcTrace : IDUtils.getRandom(8);
 
-        byte[]                    payload   = dataMap.getString("payload").getBytes(StandardCharsets.UTF_8);
-        SharedMap<String, Object> resultMap = flowSvc.wallet(action, dataMap.getString("authorization"),
-                remoteIp, dataMap.getString("contentType"),
-                new ByteArrayInputStream(payload), trace);
+        long start = System.nanoTime();
+        try {
+            byte[]                    payload   = dataMap.getString("payload").getBytes(StandardCharsets.UTF_8);
+            SharedMap<String, Object> resultMap = flowSvc.wallet(action, dataMap.getString("authorization"),
+                    remoteIp, dataMap.getString("contentType"),
+                    new ByteArrayInputStream(payload), trace, this::recordAfterClose);
+            return INetUtils.response(trace, resultMap);
+        } finally {
+            logger.info("Wallet API 소요 시간: action={}, stage=total, elapsedMs={}, trace={}",
+                    action, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
+        }
+    }
 
-        return INetUtils.response(trace, resultMap);
+    /** 고객사 응답 소켓이 종료된 뒤 요청 이력을 별도 스레드에 넘긴다. */
+    private void recordAfterClose(Runnable task) {
+
+        channel.channel().closeFuture().addListener(future -> IO_WRITER.execute(task));
     }
 
     /** /api/v1/wallet: 프록시 연결과 메서드 오류는 게이트웨이 HTTP 오류 형식을 사용한다. */
