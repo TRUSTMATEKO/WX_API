@@ -70,9 +70,8 @@ public final class WxDepositRps {
      * 모계좌번호·입금자명·입금시간·금액이다. 모계좌와 Wallet은 그 값으로 WX가 찾는다. 통지하는
      * 쪽이 WX의 내부 식별자를 알 필요가 없다.</p>
      *
-     * <p>같은 통지가 다시 와도 한 번만 기록한다. 통지에 식별자가 없으므로 모계좌·경로·입금시각·금액과
-     * 입금 주체로 식별자를 만들어 유니크 키에 맡긴다. 그래서 재전송은 안전하고, 같은 초에 같은 금액이
-     * 같은 이름으로 두 번 들어온 입금은 한 건으로 본다.</p>
+     * <p>HYPHEN 통지는 거래일과 기관 일련번호로 중복을 확인한다. 기관번호가 없는 기존 통지는
+     * 계좌·입금시각·금액·입금자명으로 식별하며 전환 전에 기록한 통지도 대조한다.</p>
      */
     public static SharedMap<String, Object> receive(SharedMap<String, Object> inMap) throws SQLException {
 
@@ -104,14 +103,16 @@ public final class WxDepositRps {
             // 통지가 가리키는 모계좌를 먼저 찾는다. 가상계좌는 재고가, SMS는 모계좌번호가 알려 준다.
             SharedMap<String, Object> targetMap  = virtual ? byVirtual(db, vaAccntNo) : byAccount(db, hqAccntNo, bankCd);
             String                    hqId       = targetMap.getString("hqId");
-            String                    externalId = externalId(sourceType, virtual ? vaAccntNo : hqAccntNo, occurredAt, amount,
+            String                    legacyId   = externalId(sourceType, virtual ? vaAccntNo : hqAccntNo, occurredAt, amount,
                     depositName);
+            String externalId = inMap.isBlank("noticeSeqNo") ? legacyId : "hyphen:" + vaAccntNo + ":"
+                    + occurredAt.substring(0, 8) + ":" + inMap.getString("bankTrxNo") + ":" + inMap.getString("noticeSeqNo");
 
             // 같은 통지가 다시 왔는지 본다. 유니크 키와 같은 조건으로 잠근다.
             List<SharedMap<String, Object>> existsList = rows(db, new Retrieve("WX.TRX_DEPOSIT")
                     .columns("id,status,mchtId,walletId,walletTrxId,amount")
-                    .where("hqId=? AND sourceType=? AND externalId=?")
-                    .forUpdate().build(), hqId, sourceType, externalId);
+                    .where("hqId=? AND sourceType=? AND externalId IN (?,?)")
+                    .forUpdate().build(), hqId, sourceType, externalId, legacyId);
             if (!existsList.isEmpty()) {
                 SharedMap<String, Object> rowMap = existsList.get(0);
                 logger.info("이미 기록한 입금 통지다. 원장을 다시 움직이지 않는다: depositId={}, status={}",

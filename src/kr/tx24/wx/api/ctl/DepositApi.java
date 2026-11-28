@@ -55,6 +55,19 @@ public final class DepositApi {
     @Route(target = {"/notify"}, loggable = false)
     public INet depositNotify() {
 
+        return receive(false);
+    }
+
+    /** /api/internal/deposit/beneficiary: HYPHEN 입금 전 가상계좌 수취인을 확인한다. */
+    @Route(target = {"/beneficiary"}, loggable = false)
+    public INet beneficiary() {
+
+        return receive(true);
+    }
+
+    /** 기관 통지와 수취조회에 같은 내부 인증 및 추적번호 검사를 적용한다. */
+    private INet receive(boolean inquiry) {
+
         String trace = request.data().getString("x-trace-id");
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
@@ -63,7 +76,8 @@ public final class DepositApi {
             // 접속 주소는 통지가 말하는 값이 아니라 실제 접속 주소를 쓴다. 감사 이력에 이 값이 남는다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
 
-            return INetUtils.response(request, depositSvc.receive(inputMap, clientIp, trace));
+            return INetUtils.response(request, inquiry ? depositSvc.beneficiary(inputMap, trace)
+                    : depositSvc.receive(inputMap, clientIp, trace));
         } catch (SecurityException refused) {
             logger.info("입금 통지의 경로 또는 키를 거절했다: trace={}", trace);
             return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));

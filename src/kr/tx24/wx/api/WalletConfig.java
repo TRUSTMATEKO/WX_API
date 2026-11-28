@@ -7,10 +7,15 @@ import kr.tx24.lib.db.RecordSet;
 import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.lang.SystemUtils;
 import kr.tx24.lib.map.SharedMap;
+import kr.tx24.lib.redis.RedisText;
+import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.wx.api.hyphen.HyphenPisp;
 import kr.tx24.wx.config.InternalApiConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * WX.CONFIG의 기관 환경을 기동 시 확정하고 내부 연동 설정을 제공한다.
@@ -21,6 +26,7 @@ public final class WalletConfig {
     private static final Logger logger = LoggerFactory.getLogger(WalletConfig.class);
 
     private static final InternalApiConfig CONFIG = new InternalApiConfig(true);
+    private static final String HYPHEN_KEY = "WX:CONFIG:HYPHEN:API_KEY";
     private static final String UPSTREAM_ENV;
 
     static {
@@ -34,6 +40,11 @@ public final class WalletConfig {
         }
 
         UPSTREAM_ENV = readEnvironment();
+        Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "wx-hyphen-key");
+            thread.setDaemon(true);
+            return thread;
+        }).scheduleWithFixedDelay(WalletConfig::publishHyphenKey, 0, 1, TimeUnit.SECONDS);
         if ("test".equals(UPSTREAM_ENV)) {
             // 설정대로 동작하는 상태이므로 기동 사실만 남긴다.
             logger.info("기관 전송 환경이 test 이다. 송금은 더미 응답으로 처리하고 예금주 조회는 테스트예금주를 반환한다. "
@@ -63,6 +74,28 @@ public final class WalletConfig {
             throw new IllegalStateException("WX.CONFIG.apiEnv에 test 또는 prod를 설정하세요.");
         }
         return env;
+    }
+
+    /** HYPHEN 수신기가 읽을 설정 버전과 현재 키 암호문을 한 값으로 게시한다. */
+    private static void publishHyphenKey() {
+
+        try {
+            SharedMap<String, Object> configMap = CONFIG.read();
+            String snapshot = configMap.getString("apiConfigVersion") + ":" + configMap.getString("apiKeyEnc");
+            if (snapshot.equals(RedisTextUtils.get(HYPHEN_KEY))) return;
+
+            // 다른 서버의 게시와 경합하면 다음 주기에 재시도한다. WATCH는 전용 연결에서만 사용한다.
+            try (var connection = RedisText.getClient().connect()) {
+                var commands = connection.sync();
+                commands.watch(HYPHEN_KEY);
+                configMap = CONFIG.reload();
+                commands.multi();
+                commands.set(HYPHEN_KEY, configMap.getString("apiConfigVersion") + ":" + configMap.getString("apiKeyEnc"));
+                commands.exec();
+            }
+        } catch (RuntimeException failure) {
+            logger.warn("HYPHEN 내부 키 게시 실패. 다음 주기에 다시 확인합니다. type={}", failure.getClass().getSimpleName());
+        }
     }
 
     private WalletConfig() {

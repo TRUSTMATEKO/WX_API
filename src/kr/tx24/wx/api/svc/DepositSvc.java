@@ -42,6 +42,27 @@ public final class DepositSvc {
         this.ledger    = ledger;
     }
 
+    /** /api/internal/deposit/beneficiary: 의뢰 정보를 확인하고 수취 가능 계좌의 고객사명을 회신한다. */
+    public SharedMap<String, Object> beneficiary(SharedMap<String, Object> inMap, String trace) {
+
+        if (!inMap.getString("vaAccntNo").matches("[0-9]{8,16}") || inMap.isBlank("depositName")
+                || !inMap.getString("senderBankCd").matches("[0-9]{3}")
+                || !inMap.getString("expectedAmount").matches("[0-9]{1,13}")) {
+            throw new WalletException("W001", "수취조회 의뢰 정보를 확인해 주세요.");
+        }
+        String name = ledger.beneficiary(inMap.getString("vaAccntNo"));
+        logger.info("가상계좌 수취조회: valid={}, senderBankCd={}, trace={}", !name.isBlank(), inMap.getString("senderBankCd"), trace);
+        if (name.isBlank()) {
+            String code = System.getProperty("hyphen.beneficiary.invalidCode", "9999");
+            if (!code.matches("[A-Z0-9]{4}") || code.equals("0000")) throw new IllegalStateException("수취조회 거절 코드 오류");
+            return WalletResult.of("W009", "수취 가능한 가상계좌를 찾을 수 없습니다.", trace)
+                    .add("hyphenResultCd", code);
+        }
+        return WalletResult.of("0000", "수취 가능", trace)
+                .add("hyphenResultCd", "0000")
+                .add("beneficiary", name);
+    }
+
     /** 입금 통지 한 건을 기록하고 Wallet 이 하나로 정해지면 바로 반영한다. */
     public SharedMap<String, Object> receive(SharedMap<String, Object> inMap, String clientIp, String trace) {
 

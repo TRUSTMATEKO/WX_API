@@ -257,6 +257,26 @@ public final class WalletLedgerRps {
         return ledger("deposit/receive", trace, () -> WxDepositRps.receive(inputMap));
     }
 
+    /** 수취조회: 사용 중인 모계좌·가상계좌·고객사 Wallet에 연결된 고객사명을 읽는다. */
+    public String beneficiary(String account) {
+
+        Retrieve query = new Retrieve("WX.HQ_VACCNT V")
+                .joinInner("WX.HQ_ACCNT H", "H.id=V.hqId")
+                .joinInner("WX.WALLET W", "W.id=V.walletId AND W.hqId=V.hqId")
+                .joinInner("WX.MCHT M", "M.mchtId=W.mchtId")
+                .column("M.name AS beneficiary")
+                .where("V.accntNo=?")
+                .where("V.status", "사용")
+                .where("H.status", "사용")
+                .where("W.status", "사용")
+                .where("W.ownerType", "MCHT")
+                .where("M.status", "사용");
+        kr.tx24.lib.db.RecordSet records = query.select(query.build(), List.of(account));
+        if (records == null) throw new WalletException("W999", "수취조회 처리 결과를 확인해 주세요.");
+        SharedMap<String, Object> rowMap = records.getRow(0);
+        return rowMap == null ? "" : rowMap.getString("beneficiary");
+    }
+
     /** 모계좌 잔액 동기화: 기관이 알려준 실제 잔액으로 장부잔액을 맞춘다. */
     public long bankBalanceRevision(String hqId) throws java.sql.SQLException {
 

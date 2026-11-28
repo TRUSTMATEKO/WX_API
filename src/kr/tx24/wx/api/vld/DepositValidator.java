@@ -32,7 +32,15 @@ public final class DepositValidator {
             throw new WalletException("W001", "가상계좌번호 또는 모계좌번호 하나만 보내 주세요.");
         }
 
+        String noticeSeq = optional(inMap, "noticeSeqNo", 6);
+        String bankTrxNo = optional(inMap, "bankTrxNo", 6);
+        if (!noticeSeq.isEmpty() && (virtual.isEmpty() || !noticeSeq.matches("[0-9]{6}")
+                || !bankTrxNo.matches("[0-9]{6}"))) {
+            throw new WalletException("W001", "가상계좌 통지의 기관 거래번호를 확인해 주세요.");
+        }
         return SharedMap.<String, Object>of()
+                .add("noticeSeqNo", noticeSeq)
+                .add("bankTrxNo", bankTrxNo)
                 .add("vaAccntNo", virtual)
                 .add("hqAccntNo", master)
                 .add("depositName", text(inMap, "depositName", 128))
