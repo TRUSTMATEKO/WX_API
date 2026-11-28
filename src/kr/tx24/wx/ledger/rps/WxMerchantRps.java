@@ -12,6 +12,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
 
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.db.DBUtils;
 import kr.tx24.lib.lang.MaskUtils;
 import kr.tx24.lib.map.SharedMap;
@@ -216,8 +217,9 @@ public final class WxMerchantRps {
             try {
                 String day = WxPostingRps.field(inMap, "trxDay", 8);
                 if (!day.matches("[0-9]{8}")) throw new IllegalArgumentException();
-                lookupDay = Integer.parseInt(LocalDate.parse(day, DateTimeFormatter.BASIC_ISO_DATE)
-                        .format(DateTimeFormatter.BASIC_ISO_DATE));
+                LocalDate date = LocalDate.parse(day, DateTimeFormatter.BASIC_ISO_DATE);
+                if (date.getYear() < 1) throw new IllegalArgumentException();
+                lookupDay = Integer.parseInt(DateUtils.toString(date));
             } catch (IllegalArgumentException | java.time.DateTimeException ex) {
                 throw new LedgerEx(LedgerCode.INVALID, "거래조회 요청번호와 거래일을 확인해 주세요.");
             }
@@ -330,9 +332,9 @@ public final class WxMerchantRps {
 
         if (!"transfer".equals(apiCode)) return;
         List<SharedMap<String, Object>> rulesList = rows(db, """
-                SELECT '사용' AS status, 'Asia/Seoul' AS timeZone,
+                SELECT '사용' AS status,
                        (firmStopStart IS NOT NULL OR firmStopEnd IS NOT NULL) AS stopEnabled,
-                       INSERT(firmStopStart,3,0,':') AS stopStart, INSERT(firmStopEnd,3,0,':') AS stopEnd
+                       firmStopStart AS stopStart, firmStopEnd AS stopEnd
                   FROM WX.CONFIG WHERE id=1
                 """);
         if (rulesList.size() != 1) {
@@ -350,10 +352,14 @@ public final class WxMerchantRps {
 
         if (!ruleMap.isEquals("status", "사용")) return true;
         if (ruleMap.getInt("stopEnabled") == 0) return false;
-        if (!ruleMap.isEquals("timeZone", "Asia/Seoul")) return true;
+        String startValue = ruleMap.getString("stopStart");
+        String endValue   = ruleMap.getString("stopEnd");
+        String hhmm       = "(?:[01][0-9]|2[0-3])[0-5][0-9]";
+        if (!startValue.matches(hhmm) || !endValue.matches(hhmm)) return true;
+
         try {
-            LocalTime start = LocalTime.parse(ruleMap.getString("stopStart"));
-            LocalTime end   = LocalTime.parse(ruleMap.getString("stopEnd"));
+            LocalTime start = DateUtils.getTime(startValue, "HHmm");
+            LocalTime end   = DateUtils.getTime(endValue, "HHmm");
             if (start.equals(end)) return true;
             if (start.isBefore(end)) return !now.isBefore(start) && now.isBefore(end);
             return !now.isBefore(start) || now.isBefore(end);

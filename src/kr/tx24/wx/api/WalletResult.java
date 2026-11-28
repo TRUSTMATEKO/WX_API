@@ -59,7 +59,7 @@ public final class WalletResult {
                 .add("resultCd", code)
                 .add("resultMsg", resultMsg)
                 .add("advanceMsg", advanceMsg)
-                .add("createAt", DateUtils.toString(DateUtils.getZonedDate(WalletPolicy.SEOUL)));
+                .add("createAt", DateUtils.getCurrentDate());
     }
 
     /** 업무 예외는 지정한 코드로 그대로 응답한다. */
@@ -88,7 +88,7 @@ public final class WalletResult {
                 if (action.equals("balance")) {
                     copyFields(dataMap, replyMap, Set.of("balance", "availableBalance"));
                 } else if (action.equals("holder")) {
-                    copyFields(dataMap, replyMap, Set.of("trackId", "bankCd", "accntNo", "holder"));
+                    copyFields(dataMap, replyMap, Set.of("trxId", "trackId", "bankCd", "accntNo", "holder"));
                 } else if (!dataMap.isBlank("trxId")) {
                     if (action.equals("inquiry")) {
                         copyFields(dataMap, replyMap, Set.of("rootResultCd", "rootResultMsg"));

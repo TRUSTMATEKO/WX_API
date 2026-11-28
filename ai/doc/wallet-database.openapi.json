@@ -27,7 +27,7 @@
           "Wallet API"
         ],
         "summary": "예금주 조회",
-        "description": "모든 Wallet은 WX.CONFIG에 등록된 공통 예금주 조회 기관(HYPHEN, COOCON, DOZN)을 사용합니다. 기관 설정이 미완성이면 접수 전에 W015를 반환합니다. 기관이 성공 응답에 예금주명을 보내지 않으면 W016을 반환합니다.",
+        "description": "모든 Wallet은 WX.CONFIG에 등록된 공통 예금주 조회 기관(HYPHEN, COOCON, DOZN)을 사용합니다. 접수 후에는 조회 결과와 관계없이 예금주 조회 거래번호(trxId)를 반환합니다. 접수 전 거절 시에는 trxId를 생략합니다. 기관 설정이 미완성이면 접수 전에 W015를 반환합니다. 기관이 성공 응답에 예금주명을 보내지 않으면 W016을 반환합니다.",
         "operationId": "walletHolder",
         "security": [
           {
@@ -365,7 +365,7 @@
           },
           "trxId": {
             "type": "string",
-            "description": "WX 송금 거래번호"
+            "description": "WX가 발급한 거래번호. 예금주 조회에서는 접수된 조회 건의 번호, 송금 및 송금 결과 조회에서는 송금 거래번호입니다."
           },
           "trackId": {
             "type": "string",

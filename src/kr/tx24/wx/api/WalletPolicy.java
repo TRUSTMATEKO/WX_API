@@ -1,7 +1,6 @@
 package kr.tx24.wx.api;
 
 import java.nio.charset.Charset;
-import java.time.ZoneId;
 import java.util.Set;
 
 /**
@@ -15,7 +14,6 @@ public final class WalletPolicy {
     private static final Charset HYPHEN_CHARSET = Charset.forName("KSC5601");
 
     /** Wallet 업무와 기관 연동의 기준 시간대. */
-    public static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
 
     /** 원장에서 읽은 참조 설정의 고정 Redis 만료 시간. */
     public static final long REFERENCE_CACHE_SECONDS = 600L;

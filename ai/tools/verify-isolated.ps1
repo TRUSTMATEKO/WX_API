@@ -51,7 +51,7 @@ $output = Join-Path $api ('out/integration/' + [guid]::NewGuid().ToString('N'))
 Save-Config (Join-Path $output 'api') @{host='127.0.0.1'; port=$apiPort; basePackage='kr.tx24.wx.api.ctl'}
 
 $apiArgs = @('-DPROC=WX_API',"-DCONF=$(Join-Path $output 'api')","-DDBSET=$(Join-Path $api 'conf/db.json')",
-             '-Dfile.encoding=UTF-8','-Duser.timezone=Asia/Seoul','-cp',"$api/out/classes;$api/lib/*")
+             '-Dfile.encoding=UTF-8','-cp',"$api/out/classes;$api/lib/*")
 $apiCheck = $apiArgs + (Join-Path $PSScriptRoot 'VerifyWalletStartup.java')
 $apiServer = $apiArgs + 'kr.tx24.inet.server.INetServer'
 $processes = @()

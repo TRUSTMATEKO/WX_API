@@ -2,7 +2,7 @@ package kr.tx24.wx.api.rps;
 
 import java.nio.charset.Charset;
 import java.sql.SQLException;
-import java.time.ZonedDateTime;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import kr.tx24.lib.db.Create;
@@ -111,7 +111,8 @@ public final class HqWithdrawRps {
             }
 
             // 접수 중지 시간과 출금 종류별 가용액을 현재 원장 기준으로 확인한다.
-            String                    hhmm      = DateUtils.getCurrentTime("HHmm");
+            LocalDateTime             postedAt  = postingTime(tx);
+            String                    hhmm      = DateUtils.toString(postedAt.toLocalTime(), "HHmm");
             SharedMap<String, Object> configMap = tx.select("""
                     SELECT CASE WHEN firmStopStart IS NULL AND firmStopEnd IS NULL THEN 1
                         WHEN firmStopStart<firmStopEnd THEN NOT (? >= firmStopStart AND ? < firmStopEnd)
@@ -121,7 +122,7 @@ public final class HqWithdrawRps {
             if (configMap == null || configMap.getInt("openFlag") != 1) {
                 throw refused("송금 접수 중지 시간입니다.");
             }
-            int                       today    = DateUtils.getRegDay();
+            int                       today    = Integer.parseInt(DateUtils.toString(postedAt.toLocalDate()));
             String                    walletId = walletMap.getString("id");
             SharedMap<String, Object> fundsMap = tx.select("SELECT * FROM WX.V_HQ_WITHDRAW_LIMIT WHERE hqId=?", hqId).getRow(0);
             if (fundsMap == null || amount > fundsMap.getLong(fee ? "payable" : "manualPayable")) {
@@ -181,7 +182,8 @@ public final class HqWithdrawRps {
                     .record("sourceAccount", bankMap.getString("acqAccount"))
                     .record("reason", inMap.getString("reason"))
                     .record("regId", inMap.getString("userId"))
-                    .record("regDay", today));
+                    .record("regDay", today)
+                    .record("regDate", DateUtils.toTimestamp(postedAt)));
             for (SharedMap<String, Object> detailMap : detailsList) {
                 tx.insert(new Create()
                         .table("WX.HQ_WITHDRAW_FEE")
@@ -214,7 +216,9 @@ public final class HqWithdrawRps {
                     .record("sender", sender)
                     .record("note", inMap.getString("reason"))
                     .record("trxDay", today)
+                    .record("trxDate", DateUtils.toTimestamp(postedAt))
                     .record("regDay", today)
+                    .record("regDate", DateUtils.toTimestamp(postedAt))
                     .record("regId", inMap.getString("userId")));
             changed(tx.update("UPDATE WX.HQ_ACCNT SET reservedAmt=reservedAmt+? WHERE id=?", amount, hqId));
             if (!fee) {
@@ -315,7 +319,8 @@ public final class HqWithdrawRps {
                 tx.commit();
                 return current;
             }
-            long amount = rowMap.getLong("amount");
+            long          amount   = rowMap.getLong("amount");
+            LocalDateTime postedAt = postingTime(tx);
             if (!current.equals(status)) {
                 changed(tx.update(new Update()
                         .table("WX.TRX_WALLET")
@@ -333,7 +338,7 @@ public final class HqWithdrawRps {
                 changed(tx.update("UPDATE WX.HQ_ACCNT SET reservedAmt=reservedAmt-?,balance=balance-? WHERE id=? AND reservedAmt>=?",
                         amount, success ? amount : 0, hqId, amount));
                 if (success) {
-                    int day = DateUtils.getRegDay();
+                    int day = Integer.parseInt(DateUtils.toString(postedAt.toLocalDate()));
                     tx.update(new Update()
                             .table("WX.TRX_WALLET")
                             .record("hqBalanceBef", before)
@@ -364,22 +369,32 @@ public final class HqWithdrawRps {
                             .record("acqResultCd", DBUtils.cut(code, 16))
                             .record("regId", rowMap.getString("regId"))
                             .record("trxDay", day)
-                            .record("regDay", day));
+                            .record("trxDate", DateUtils.toTimestamp(postedAt))
+                            .record("regDay", day)
+                            .record("regDate", DateUtils.toTimestamp(postedAt)));
                 } else {
                     // 실패한 출금에 점유된 과금 상세는 다시 출금 대상으로 돌려준다.
                     tx.update("UPDATE WX.HQ_WITHDRAW_FEE SET active=NULL WHERE withdrawId=?", id);
                 }
             }
             tx.update("""
-                    UPDATE WX.TRX_HQ_WITHDRAW SET status=?,responseCode=?,message=?,checkedAt=NOW(),
-                           settledAt=IF(?='미확인',NULL,NOW()) WHERE id=?
-                    """, status, DBUtils.cut(code, 24), DBUtils.cut(message, 128), status, id);
+                    UPDATE WX.TRX_HQ_WITHDRAW SET status=?,responseCode=?,message=?,checkedAt=?,
+                           settledAt=IF(?='미확인',NULL,?) WHERE id=?
+                    """, status, DBUtils.cut(code, 24), DBUtils.cut(message, 128),
+                    DateUtils.toTimestamp(postedAt), status, DateUtils.toTimestamp(postedAt), id);
             tx.commit();
             return status;
         } catch (RuntimeException | SQLException | Error ex) {
             tx.rollback(ex);
             throw ex;
         }
+    }
+
+    /** 본사 출금: DB 거래 시각을 조회해 원장 일시와 업무일의 기준으로 사용한다. */
+    private static LocalDateTime postingTime(DBTrx tx) throws SQLException {
+
+        return DateUtils.getDate(tx.select("SELECT DATE_FORMAT(NOW(),'%Y%m%d%H%i%s') AS postingTime")
+                .getRowFirst().getString("postingTime"));
     }
 
     /** 작업기에서 재조회할 본사 출금과 접수 당시 기관 정보를 읽는다. */

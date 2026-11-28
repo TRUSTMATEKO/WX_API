@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.Charset;
+import java.time.LocalDateTime;
 import java.security.KeyFactory;
 import java.security.SecureRandom;
 import java.security.spec.RSAPublicKeySpec;
@@ -89,6 +90,7 @@ public class HyphenPisp {
 
 
 
+        LocalDateTime requestTime = DateUtils.getDate();
         KRWHead head = new KRWHead()
             .trCd("")
             .company(inet.data().getString("acqSid"))
@@ -97,15 +99,15 @@ public class HyphenPisp {
             .trxCd("400")
             .cnt("1")
             .seqNo(getSequence())
-            .trxDay(DateUtils.getCurrentDay())
-            .trxTime(DateUtils.getCurrentTime())
+            .trxDay(DateUtils.toString(requestTime.toLocalDate()))
+            .trxTime(DateUtils.toString(requestTime.toLocalTime()))
             .rootTrxDay("") // 조회일자
             .rootSeqNo("")    // 원거래번호
             .filler("");
 
 
         KRW0600400 data = new KRW0600400()
-            .transactionDay(DateUtils.getCurrentDay("MMdd"))
+            .transactionDay(DateUtils.toString(requestTime.toLocalDate(), "MMdd"))
             .recvBankCd(inet.data().getString("recvBankCd"))
             .recvAccount(inet.data().getString("recvAccount"));
 
@@ -181,6 +183,7 @@ public class HyphenPisp {
 
 
 
+        LocalDateTime requestTime = DateUtils.getDate();
         KRWHead head = new KRWHead()
                 .trCd("")
                 .company(inet.data().getString("acqSid"))
@@ -189,8 +192,8 @@ public class HyphenPisp {
                 .trxCd("100")
                 .cnt("1")
                 .seqNo(getSequence())
-                .trxDay(DateUtils.getCurrentDay())
-                .trxTime(DateUtils.getCurrentTime())
+                .trxDay(DateUtils.toString(requestTime.toLocalDate()))
+                .trxTime(DateUtils.toString(requestTime.toLocalTime()))
                 .rootTrxDay("") // 조회일자
                 .rootSeqNo("")    // 원거래번호
                 .filler("");
@@ -255,6 +258,7 @@ public class HyphenPisp {
         String rootSpecNumber = CommonUtils.length(inet.data().getString("acqTrxId")) > 11
                 ? inet.data().getString("acqTrxId").substring(6) : "";
 
+        LocalDateTime requestTime = DateUtils.getDate();
         KRWHead head = new KRWHead()
                 .trCd("")
                 .company(inet.data().getString("acqSid"))
@@ -263,8 +267,8 @@ public class HyphenPisp {
                 .trxCd("101")
                 .cnt("1")
                 .seqNo(getSequence())
-                .trxDay(DateUtils.getCurrentDay())
-                .trxTime(DateUtils.getCurrentTime())
+                .trxDay(DateUtils.toString(requestTime.toLocalDate()))
+                .trxTime(DateUtils.toString(requestTime.toLocalTime()))
                 .rootTrxDay("") // 조회일자
                 .rootSeqNo("")    // 원거래번호
                 .filler("");
@@ -324,6 +328,7 @@ public class HyphenPisp {
         //inet.head.development true
         setEnv(inet.head().getBoolean("development"));
 
+        LocalDateTime requestTime = DateUtils.getDate();
         KRWHead head = new KRWHead()
                 .trCd("")
                 .company(inet.data().getString("acqSid"))
@@ -332,8 +337,8 @@ public class HyphenPisp {
                 .trxCd("300")
                 .cnt("1")
                 .seqNo(getSequence())
-                .trxDay(DateUtils.getCurrentDay())
-                .trxTime(DateUtils.getCurrentTime())
+                .trxDay(DateUtils.toString(requestTime.toLocalDate()))
+                .trxTime(DateUtils.toString(requestTime.toLocalTime()))
                 .rootTrxDay("") // 조회일자
                 .rootSeqNo("")    // 원거래번호
                 .filler("");
@@ -379,6 +384,7 @@ public class HyphenPisp {
         //inet.head.development true
         setEnv(inet.head().getBoolean("development"));
 
+        LocalDateTime requestTime = DateUtils.getDate();
         KRWHead head = new KRWHead()
                 .trCd("")
                 .company(inet.data().getString("acqSid"))
@@ -387,8 +393,8 @@ public class HyphenPisp {
                 .trxCd("100")
                 .cnt("1")
                 .seqNo(getSequence())
-                .trxDay(DateUtils.getCurrentDay())
-                .trxTime(DateUtils.getCurrentTime())
+                .trxDay(DateUtils.toString(requestTime.toLocalDate()))
+                .trxTime(DateUtils.toString(requestTime.toLocalTime()))
                 .rootTrxDay(inet.data().getString("inqueryDay")) // 조회일자
                 .rootSeqNo("")    // 원거래번호
                 .filler("");
@@ -665,8 +671,9 @@ public class HyphenPisp {
         resultMap.put("acqResultCd"     , "X002");
         resultMap.put("acqResultMsg"    , "필수값없음,"+message);
 
-        resultMap.put("acqTrxDay"       , DateUtils.getCurrentDay());
-        resultMap.put("acqTrxTime"      , DateUtils.getCurrentTime());
+        LocalDateTime responseTime = DateUtils.getDate();
+        resultMap.put("acqTrxDay"       , DateUtils.toString(responseTime.toLocalDate()));
+        resultMap.put("acqTrxTime"      , DateUtils.toString(responseTime.toLocalTime()));
         resultMap.put("acqTrxDate"      , resultMap.getString("acqTrxDay")+resultMap.getString("acqTrxTime"));
         resultMap.put("acqTrxId"        , resultMap.getString("acqTrxDate").substring(2));
 

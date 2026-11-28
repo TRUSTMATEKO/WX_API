@@ -15,7 +15,7 @@ SLF4J로 로그를 남기는 클래스는 클래스 상단에 `private static fi
 
 Map 타입의 변수와 매개변수 이름은 `Map`, List 타입은 `List`로 끝낸다. 예를 들어 `acceptedMap`, `transferList`로 작성한다.
 
-날짜·시간의 조회, 변환, 포맷에는 TX24_LIB의 `DateUtils`를 우선 사용한다. 서울 기준 시각은 시간대를 명시하고, 원장 트랜잭션에는 DB 시각을 사용한다. 엄격한 전문·요청 날짜 검증과 경과 시간 측정에는 해당 동작을 보장하는 API를 사용한다.
+날짜·시간의 조회, 변환, 포맷에는 TX24_LIB의 `DateUtils`를 우선 사용한다. JVM과 데이터베이스의 기본 업무 시간대를 사용하며, 원장 거래일과 기록 시각은 같은 DB 시각에서 산정한다. 엄격한 전문·요청 날짜 검증과 경과 시간 측정에는 해당 동작을 보장하는 API를 사용한다.
 
 NGINX와 TX24_HTTP가 전달한 단일 접속 IP는 WX의 MCHT_IP와 대조한다. HYPHEN 원본 패키지는 유지하며 시험 프로필에 연결하기 전 운영 요청을 닫는다. 고객사 웹훅은 이 프로세스가 보내지 않는다. `TRX_WEBHOOK` 에 적재하고 `WX:TASK:WEBHOOK` 큐에 id 를 올리면 WX_TASK 가 발송한다(OPL_API·OPL_TASK 와 같은 구조).
 

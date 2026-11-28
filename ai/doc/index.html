@@ -39,6 +39,7 @@ h1,h2,h3{line-height:1.35}h1{margin:3px 0}h2{margin:2rem 0 .7rem}h3{margin:1.3re
 }</code></pre>
 <h2 id="holder">예금주 조회</h2>
 <pre><code>{"trackId":"H001","bankCd":"004","accntNo":"0000000000"}</code></pre>
+<p>조회가 접수되면 성공·실패 응답 모두에 WX가 발급한 예금주 조회 거래번호(<code>trxId</code>)와 고객사 요청번호(<code>trackId</code>)가 포함됩니다. 접수 전 거절 응답에서는 <code>trxId</code>를 생략합니다.</p>
 <p>기관 조회가 성공하면 기관이 확인한 예금주명을 <code>holder</code>에 제공합니다.</p>
 <h3>예금주 조회 기관 설정이 누락된 경우</h3>
 <pre><code>{"resultCd":"W015","resultMsg":"예금주 조회 기관 설정 오류","advanceMsg":"예금주 조회 기관 설정을 확인해 주세요.","createAt":"20261120103000","walletId":"SAMPLE-WALLET"}</code></pre>

@@ -125,6 +125,7 @@ public final class HolderSvc {
             String message  = repliedMap.getString("acqResultMsg", "예금주를 확인하지 못했습니다.");
             replyMap = WalletResult.of(code, message, etx.getTrace());
         }
+        replyMap.put("trxId", trxId);
         replyMap.put("trackId", acceptedMap.getString("trackId"));
         replyMap.put("bankCd",  acceptedMap.getString("bankCd"));
         replyMap.put("accntNo", acceptedMap.getString("accntNoMasked"));

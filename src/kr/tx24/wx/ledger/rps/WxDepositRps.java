@@ -1,5 +1,6 @@
 package kr.tx24.wx.ledger.rps;
 
+import java.time.DateTimeException;
 import java.time.LocalDateTime;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -90,9 +91,6 @@ public final class WxDepositRps {
         }
         if (amount <= 0) throw new LedgerEx(LedgerCode.INVALID, "입금액을 확인해 주세요.");
         if (depositName.isEmpty()) throw new LedgerEx(LedgerCode.INVALID, "입금자명을 확인해 주세요.");
-        if (!occurredAt.matches("[0-9]{14}")) {
-            throw new LedgerEx(LedgerCode.INVALID, "입금시간은 yyyyMMddHHmmss 형식입니다.");
-        }
         if (virtual && !vaAccntNo.matches("[0-9]{8,32}")) {
             throw new LedgerEx(LedgerCode.INVALID, "가상계좌번호를 확인해 주세요.");
         }
@@ -101,7 +99,7 @@ public final class WxDepositRps {
         }
 
         String sourceType = virtual ? "va" : "sms";
-        LocalDateTime occurred = DateUtils.getDate(occurredAt);
+        LocalDateTime occurred = depositTime(occurredAt);
 
         SharedMap<String, Object> outMap = transaction(db -> {
             // 통지가 가리키는 모계좌를 먼저 찾는다. 가상계좌는 재고가, SMS는 모계좌번호가 알려 준다.
@@ -288,6 +286,20 @@ public final class WxDepositRps {
         WxWebhookRps.publish(outMap);
 
         return outMap;
+    }
+
+    /** 자동·수동 입금: 통지 시각을 파싱하고 달력 보정이나 날짜 넘김이 없는지 확인한다. */
+    private static LocalDateTime depositTime(String value) {
+
+        if (value.matches("[0-9]{14}")) {
+            try {
+                LocalDateTime occurred = DateUtils.getDate(value);
+                if (value.equals(DateUtils.toString(occurred))) return occurred;
+            } catch (DateTimeException invalid) {
+                // 해석할 수 없는 값은 입금일시 검증 오류로 처리한다.
+            }
+        }
+        throw new LedgerEx(LedgerCode.INVALID, "입금시간을 yyyyMMddHHmmss 형식의 유효한 날짜와 시각으로 입력해 주세요.");
     }
 
     /**
@@ -677,10 +689,7 @@ public final class WxDepositRps {
             throw new LedgerEx(LedgerCode.INVALID, "수신경로는 가상계좌 또는 SMS 입니다.");
         }
         if (amount <= 0) throw new LedgerEx(LedgerCode.INVALID, "입금액을 확인해 주세요.");
-        if (!occurredAt.matches("[0-9]{14}")) {
-            throw new LedgerEx(LedgerCode.INVALID, "입금시간은 yyyyMMddHHmmss 형식입니다.");
-        }
-        LocalDateTime occurred = DateUtils.getDate(occurredAt);
+        LocalDateTime occurred = depositTime(occurredAt);
 
         SharedMap<String, Object> outMap = transaction(db -> {
             // 모계좌는 Wallet 이 알려 준다. 운영자는 돈의 주인을 고르고, 어느 계좌로 들어왔는지는

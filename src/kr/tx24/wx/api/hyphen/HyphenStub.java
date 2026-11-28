@@ -1,12 +1,11 @@
 package kr.tx24.wx.api.hyphen;
 
-import java.time.ZonedDateTime;
+import java.time.LocalDateTime;
 import java.util.function.Consumer;
 
 import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.redis.RedisUtils;
-import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.utils.ExtCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,7 +88,7 @@ public final class HyphenStub {
     public static SharedMap<String, Object> transfer(String hqId, long amount,
             Consumer<String> recordBeforeSend) {
 
-        ZonedDateTime             now      = DateUtils.getZonedDate(WalletPolicy.SEOUL);
+        LocalDateTime             now      = DateUtils.getDate();
         SharedMap<String, Object> replyMap = head(hqId, now);
         recordBeforeSend.accept(replyMap.getString("acqTrxId"));
 
@@ -134,7 +133,7 @@ public final class HyphenStub {
     public static SharedMap<String, Object> holder(String hqId, String bankCd, String accntNo) {
 
         logger.info("[시험] 더미 예금주 조회: bankCd={}, 계좌 자릿수={}", bankCd, accntNo.length());
-        return head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL))
+        return head(hqId, DateUtils.getDate())
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상조회")
                 .add("holder", TEST_HOLDER);
@@ -149,7 +148,7 @@ public final class HyphenStub {
     public static SharedMap<String, Object> transferResult(String hqId, String acqTrxId) {
 
         logger.info("[시험] 더미 송금 결과 조회: acqTrxId={}", acqTrxId);
-        SharedMap<String, Object> replyMap = head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL));
+        SharedMap<String, Object> replyMap = head(hqId, DateUtils.getDate());
         // 조회는 원거래에 대해 답하는 것이다. 조회 전문 자신의 일련번호가 아니라 받은 원거래번호를 돌려주다.
         replyMap.put("acqTrxId", acqTrxId);
         return replyMap
@@ -169,7 +168,7 @@ public final class HyphenStub {
         Object stored = RedisUtils.get(key);
         long amount = stored == null ? 0L : Long.parseLong(String.valueOf(stored).trim());
         logger.debug("[시험] 더미 모계좌 잔액 조회: hqId={}, 잔액={}", hqId, amount);
-        return head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL))
+        return head(hqId, DateUtils.getDate())
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상조회")
                 .add("balance", amount);
@@ -181,7 +180,7 @@ public final class HyphenStub {
      * <p>{@code acqTrxId}는 실제 전문과 같이 거래일 여섯 자리와 일련번호 여섯 자리를 이어 붙인
      * 열두 자리다. 재조회가 이 형식을 요구하므로 시험에서도 같게 만든다.</p>
      */
-    private static SharedMap<String, Object> head(String hqId, ZonedDateTime now) {
+    private static SharedMap<String, Object> head(String hqId, LocalDateTime now) {
 
         String day  = DateUtils.toString(now.toLocalDate());
         String time = DateUtils.toString(now.toLocalTime());
