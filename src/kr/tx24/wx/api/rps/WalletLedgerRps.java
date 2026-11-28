@@ -94,6 +94,12 @@ public final class WalletLedgerRps {
         return merchant(inMap, trace);
     }
 
+    /** 송금 접수 후 기관 전송 전에 중지가 시작되었는지 확인한다. */
+    public void requireTransferOpen(String bankCd) {
+
+        WxTransferRps.requireTransferOpen(bankCd);
+    }
+
     /** 고객사 응답이 종료된 뒤 접수와 결과를 이력 한 건으로 기록한다. */
     public void recordIo(SharedMap<String, Object> ioMap, String trace) throws Exception {
 
@@ -124,6 +130,18 @@ public final class WalletLedgerRps {
             logger.info("Wallet API 소요 시간: operation=transfer/recordAcq, stage=ledger, elapsedMs={}, trace={}",
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start), trace);
         }
+    }
+
+    /** 본사 송금 상세에서 요청한 성공 거래의 정정을 처리한다. */
+    public SharedMap<String, Object> reverse(SharedMap<String, Object> commandMap, String trace) {
+
+        return ledger("transfer/reverse", trace, () -> WxTransferRps.reverse(commandMap));
+    }
+
+    /** 내부 통지: 매입사 원거래번호로 송금 실패 정정을 반영한다. */
+    public SharedMap<String, Object> transferFailure(SharedMap<String, Object> noticeMap, String trace) {
+
+        return ledger("transfer/failure-notify", trace, () -> WxTransferRps.failureNotice(noticeMap));
     }
 
     /** 송금 확정: 기관 응답으로 원장 상태와 잔액을 확정한다. */
@@ -243,6 +261,19 @@ public final class WalletLedgerRps {
     public long bankBalanceRevision(String hqId) throws java.sql.SQLException {
 
         return WxDepositRps.balanceRevision(hqId);
+    }
+
+    /** 모계좌 잔액 조회용 설정과 원장 버전을 읽는다. */
+    public SharedMap<String, Object> balanceAccount(String hqId) throws java.sql.SQLException {
+
+        return WxDepositRps.balanceAccount(hqId);
+    }
+
+    /** 수동·야간 조회의 기관 잔액을 모계좌 원장과 대조한다. */
+    public SharedMap<String, Object> refreshBalance(SharedMap<String, Object> jobMap, long balance, String actor,
+                                                    String trace) {
+
+        return ledger("bank/balance", trace, () -> WxDepositRps.refreshBalance(jobMap, balance, actor));
     }
 
     /** 작업기가 재조회할 모계좌 한 건을 선점한다. */

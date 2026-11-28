@@ -3,9 +3,12 @@ package kr.tx24.wx.api.svc;
 import kr.tx24.inet.mapper.Autowired;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.map.TypeRegistry;
+import kr.tx24.wx.api.WalletConfig;
+import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.WalletZone;
+import kr.tx24.wx.api.hyphen.HyphenStub;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
 import kr.tx24.wx.api.vld.AdminLedgerValidator;
 import org.slf4j.Logger;
@@ -36,6 +39,39 @@ public final class AdminLedgerSvc {
         this.ledger    = ledger;
     }
 
+    /** 수동·야간 모계좌 잔액조회에서 기관이 확인한 금액만 원장에 반영한다. */
+    public SharedMap<String, Object> refreshBalance(SharedMap<String, Object> inMap, String clientIp, String trace)
+            throws java.sql.SQLException {
+
+        SharedMap<String, Object> inputMap = validator.balance(inMap);
+        verifyInternal("bank/balance", inputMap, clientIp, trace);
+        String hqId = inputMap.getString("hqId");
+        SharedMap<String, Object> jobMap = ledger.balanceAccount(hqId);
+        if (jobMap == null) throw new WalletException("W009", "사용 중인 모계좌를 찾을 수 없습니다.");
+        String deferred = "진행 중인 거래 또는 모계좌 변경으로 잔액 갱신을 보류했습니다.";
+        if (jobMap.getLong("reservedAmt") != 0) return WalletResult.of("0000", deferred, trace);
+
+        SharedMap<String, Object> responseMap;
+        if ("test".equals(WalletConfig.upstreamEnv())) {
+            responseMap = HyphenStub.balance(hqId);
+        } else {
+            if (!jobMap.containsKey("upstream")) throw new WalletException("W003", "모계좌의 기관 설정을 확인해 주세요.");
+            responseMap = UpstreamSvc.open(TransferSvc.upstream(jobMap)).balance();
+        }
+        if (responseMap.isEquals("acqResultCd", WalletPolicy.NO_RESPONSE)) {
+            logger.info("기관 통신장애로 잔액 갱신 보류: hqId={}, trace={}", hqId, trace);
+            return WalletResult.of("0000", "기관 통신장애로 잔액을 갱신하지 못했습니다.", trace);
+        }
+        if (!responseMap.isEquals("acqResultCd", WalletPolicy.SUCCEEDED) || !responseMap.containsKey("balance")) {
+            throw new WalletException("W003", "기관 잔액조회 응답을 확인해 주세요.");
+        }
+        SharedMap<String, Object> resultMap = confirmed("bank/balance", ledger.refreshBalance(jobMap,
+                responseMap.getLong("balance"), inputMap.getString("userId"), trace), trace);
+        if (resultMap.getBoolean("deferred")) return WalletResult.of("0000", deferred, trace);
+        return reply(resultMap.getBoolean("changed") ? "모계좌 잔액을 갱신했습니다." : "기관 잔액과 일치합니다.",
+                resultMap, trace, "hqId", "reported", "changed");
+    }
+
     /**
      * 미확정 송금을 운영자 근거로 종결한다.
      *
@@ -57,6 +93,16 @@ public final class AdminLedgerSvc {
 
         return reply("송금 결과를 종결했습니다.", dataMap, trace,
                 "trxId", "trackId", "mchtId", "walletId", "status", "changed", "amount", "walletTrxId", "balance");
+    }
+
+    /** /api/internal/ledger/transfer/reverse: 운영자 정정을 반영하고 알린다. */
+    public SharedMap<String, Object> reverse(SharedMap<String, Object> inMap, String clientIp, String trace) {
+
+        SharedMap<String, Object> inputMap = validator.reverse(inMap);
+        verifyInternal("transfer/reverse", inputMap, clientIp, trace);
+        SharedMap<String, Object> dataMap = confirmed("transfer/reverse", ledger.reverse(inputMap, trace), trace);
+        kr.tx24.wx.api.utils.NotificationUtils.transferFailure(dataMap.getString("trxId"));
+        return reply("송금을 실패로 정정했습니다.", dataMap, trace, "trxId", "status", "changed", "amount");
     }
 
     /** 미매칭 입금에 고객사 Wallet을 지정해 확정 원장에 입금으로 반영한다. */

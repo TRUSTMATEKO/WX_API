@@ -61,7 +61,7 @@ public final class HyphenSvc implements UpstreamSvc {
         }
         HyphenPisp client = new HyphenPisp() {
             @Override
-            public byte[] execute(byte[] bytes) {
+            protected byte[] execute(byte[] bytes, int timeoutMillis) {
 
                 KRWHead head = new KRWHead(bytes);
                 if (!head.getTrxDay().matches("[0-9]{8}") || !head.getSeqNo().matches("[0-9]{6}")) {
@@ -69,7 +69,7 @@ public final class HyphenSvc implements UpstreamSvc {
                 }
                 // 이 번호로 장애 거래를 재조회하므로 기록에 실패하면 소켓에 전문을 쓰기 전에 중단한다.
                 recordBeforeSend.accept(head.getTrxDay().substring(2) + head.getSeqNo());
-                return super.execute(bytes);
+                return super.execute(bytes, timeoutMillis);
             }
         };
 

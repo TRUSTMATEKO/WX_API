@@ -45,6 +45,16 @@ public final class AdminLedgerValidator {
                 .add("reason", text(inMap, "reason", 1024));
     }
 
+    /** 송금 상세에서 입력한 정정 메시지와 작업자를 확인한다. */
+    public SharedMap<String, Object> reverse(SharedMap<String, Object> inMap) {
+
+        return SharedMap.<String, Object>of()
+                .add("trxId", text(inMap, "trxId", 32))
+                .add("actor", text(inMap, "userId", 24))
+                .add("reason", text(inMap, "reason", 128))
+                .add("responseCode", "W0SF");
+    }
+
     /** 미매칭 입금의 Wallet 지정 요청을 검증한다. */
     public SharedMap<String, Object> assign(SharedMap<String, Object> inMap) {
 
@@ -148,6 +158,14 @@ public final class AdminLedgerValidator {
 
         return SharedMap.<String, Object>of()
                 .add("hookId", text(inMap, "hookId", 32))
+                .add("userId", text(inMap, "userId", 24));
+    }
+
+    /** 수동·야간 모계좌 잔액조회 대상과 작업 주체를 확인한다. */
+    public SharedMap<String, Object> balance(SharedMap<String, Object> inMap) {
+
+        return SharedMap.<String, Object>of()
+                .add("hqId", text(inMap, "hqId", 32))
                 .add("userId", text(inMap, "userId", 24));
     }
 

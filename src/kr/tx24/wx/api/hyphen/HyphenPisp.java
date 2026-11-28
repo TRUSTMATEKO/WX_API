@@ -255,7 +255,11 @@ public class HyphenPisp {
 
         //예금주명을 확인하여 리턴
         LinkedMap<String,Object> resultMap = getMessage(resHead);
-        resultMap.put("balance" , CommonUtils.parseLong(resData.getBalanceSign()+resData.getBalanceAmount()));
+        String balanceAmount = resData.getBalanceAmount();
+        String balanceSign   = resData.getBalanceSign();
+        if (response.length >= 156 && balanceAmount.matches("[0-9]{1,13}") && balanceSign.matches("[+-]?")) {
+            resultMap.put("balance", Long.parseLong(balanceSign + balanceAmount));
+        }
         resultMap.put("fee"     , CommonUtils.parseLong(resData.getFee()));
 
         return resultMap;
@@ -468,7 +472,7 @@ public class HyphenPisp {
         return execute(request, 0);
     }
 
-    private byte[] execute(byte[] request, int timeoutMillis) {
+    protected byte[] execute(byte[] request, int timeoutMillis) {
 
         long start = System.nanoTime();
 

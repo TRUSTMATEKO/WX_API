@@ -94,7 +94,9 @@ public final class WxWebhookRps {
 
         if (postedAt == null) postedAt = WxPostingRps.postingTime(db);
 
-        String       dedupKey   = trxId + ":" + eventType;
+        boolean correction = TRANSFER_SETTLED.equals(eventType) && transferMap.isEquals("beforeStatus", "성공")
+                && transferMap.isEquals("status", "실패");
+        String       dedupKey   = trxId + ":" + eventType + (correction ? ":reversed" : "");
         String       payload    = WxPostingRps.encryptForLedger(JacksonUtils.get().toJson(body(transferMap, eventType, postedAt)));
         int          day        = WxPostingRps.businessDay(postedAt);
         List<String> queuedList = new java.util.ArrayList<>();

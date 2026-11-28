@@ -99,7 +99,14 @@ public final class HqWithdrawSvc {
             status = WalletPolicy.SUCCEEDED.equals(code) ? "성공" : "실패";
         }
 
-        return ledger.finish(id, status, code, bankMap.getString("acqResultMsg"), !referenceRecorded.get());
+        SharedMap<String, Object> balanceMap = null;
+        if ("성공".equals(status) && bankMap.containsKey("balance")) {
+            balanceMap = SharedMap.<String, Object>of()
+                    .add("balanceRevision", acceptedMap.getLong("balanceRevision"))
+                    .add("settingRev", acceptedMap.getLong("settingRev"))
+                    .add("reportedBalance", bankMap.getLong("balance"));
+        }
+        return ledger.finish(id, status, code, bankMap.getString("acqResultMsg"), !referenceRecorded.get(), balanceMap);
     }
 
     /** 임의 출금은 WX_ADM에서 재인증을 마친 요청의 값만 사용하고 승인 정보를 한 번 소비한다. */

@@ -3,7 +3,6 @@ package kr.tx24.wx.api.svc;
 import java.util.List;
 import kr.tx24.inet.mapper.Autowired;
 import kr.tx24.lib.map.SharedMap;
-import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
 import org.slf4j.Logger;
@@ -74,10 +73,6 @@ public final class RecoverySvc {
 
     /** 작업기 주기에 입금 이후 보류된 모계좌 한 건을 새로운 기관 잔액으로 대조한다. */
     public SharedMap<String, Object> recoverBalance(String trace) throws Exception {
-
-        if (!"prod".equals(WalletConfig.upstreamEnv())) {
-            return counts(0, 0, 0);
-        }
 
         SharedMap<String, Object> jobMap = ledger.claimBalanceReview();
         if (jobMap == null) {

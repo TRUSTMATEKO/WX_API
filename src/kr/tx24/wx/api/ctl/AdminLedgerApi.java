@@ -57,6 +57,13 @@ public final class AdminLedgerApi {
         this.withdrawals = withdrawals;
     }
 
+    /** /api/internal/ledger/bank/balance: 수동·야간 조회로 모계좌 원장 잔액을 대조한다. */
+    @Route(target = {"/bank/balance"}, loggable = false)
+    public INet bankBalance() {
+
+        return submit("bank/balance");
+    }
+
     /** /api/internal/ledger/hq-withdraw: 지정 계좌 본사 출금을 접수한다. */
     @Route(target = {"/hq-withdraw"}, loggable = false)
     public INet withdraw() {
@@ -69,6 +76,13 @@ public final class AdminLedgerApi {
     public INet transferSettle() {
 
         return submit("transfer/settle");
+    }
+
+    /** /api/internal/ledger/transfer/reverse: 운영자가 성공 송금을 실패로 정정한다. */
+    @Route(target = {"/transfer/reverse"}, loggable = false)
+    public INet transferReverse() {
+
+        return submit("transfer/reverse");
     }
 
     /** /api/internal/ledger/deposit/assign: 미매칭 입금에 고객사 Wallet을 지정한다. */
@@ -137,7 +151,9 @@ public final class AdminLedgerApi {
             String                    clientIp = NettyUtils.getRemoteAddress(channel);
 
             SharedMap<String, Object> dataMap  = switch (operation) {
+                case "bank/balance" -> adminLedgerSvc.refreshBalance(inputMap, clientIp, trace);
                 case "hq-withdraw" -> withdrawals.submit(inputMap, trace);
+                case "transfer/reverse" -> adminLedgerSvc.reverse(inputMap, clientIp, trace);
                 case "transfer/settle" -> adminLedgerSvc.settle(inputMap, clientIp, trace);
                 case "deposit/assign"  -> adminLedgerSvc.assignDeposit(inputMap, clientIp, trace);
                 case "deposit/manual"  -> adminLedgerSvc.manualDeposit(inputMap, clientIp, trace);

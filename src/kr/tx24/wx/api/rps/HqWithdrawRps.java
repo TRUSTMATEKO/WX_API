@@ -1,7 +1,9 @@
 package kr.tx24.wx.api.rps;
 
 import java.nio.charset.Charset;
+import java.sql.Connection;
 import java.sql.SQLException;
+import kr.tx24.wx.ledger.rps.WxDepositRps;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -44,6 +46,7 @@ public final class HqWithdrawRps {
                     .columns("id hqId,acq,acqId acqSid,bankCd acqBankCd,accntNo acqAccount,key2 acqKey2")
                     .column("alarmBalance,withdrawBankCd bankCd,withdrawAccntNo accntNo,withdrawAccntNoEnc cipher")
                     .column("withdrawHolder holder,settingRev,status")
+                    .column("COALESCE((SELECT MAX(t.idx) FROM WX.TRX_HQ t WHERE t.hqId=HQ_ACCNT.id),0) balanceRevision")
                     .where("id=?")
                     .forUpdate().build(), hqId).getRow(0);
             SharedMap<String, Object> walletMap = tx.select(new Retrieve("WX.WALLET w")
@@ -267,9 +270,23 @@ public final class HqWithdrawRps {
     public String finish(
             String id, String status, String code, String message, boolean unsentOnly) throws SQLException {
 
+        return finish(id, status, code, message, unsentOnly, null);
+    }
+
+    public String finish(String id, String status, String code, String message, boolean unsentOnly,
+                         SharedMap<String, Object> balanceMap) throws SQLException {
+
+        try (Connection db = WxDatabaseRps.open()) {
+            return finish(db, id, status, code, message, unsentOnly, balanceMap);
+        }
+    }
+
+    private String finish(Connection db, String id, String status, String code, String message, boolean unsentOnly,
+                          SharedMap<String, Object> balanceMap) throws SQLException {
+
         DBTrx tx = new DBTrx();
         try {
-            tx.begin();
+            tx.begin(db);
 
             // 접수와 같은 순서로 모계좌를 잠근 다음 출금 건의 최신 상태를 확인한다.
             SharedMap<String, Object> ownerMap = tx.select("SELECT hqId FROM WX.TRX_HQ_WITHDRAW WHERE id=?", id).getRow(0);
@@ -350,6 +367,9 @@ public final class HqWithdrawRps {
                             .record("trxDate", DateUtils.toTimestamp(postedAt))
                             .record("regDay", day)
                             .record("regDate", DateUtils.toTimestamp(postedAt)));
+                    if (balanceMap != null && WalletPolicy.SUCCEEDED.equals(code)) {
+                        WxDepositRps.syncTransferBalance(db, hqId, id, before - amount, balanceMap, rowMap.getString("regId"));
+                    }
                 } else {
                     // 실패한 출금에 점유된 과금 상세는 다시 출금 대상으로 돌려준다.
                     tx.update("UPDATE WX.HQ_WITHDRAW_FEE SET active=NULL WHERE withdrawId=?", id);

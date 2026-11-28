@@ -8,6 +8,9 @@ package kr.tx24.wx.ledger.cst;
  */
 public final class LedgerKeys {
 
+    /** 출금 모계좌의 은행코드를 붙이는 고객사 송금 긴급중지 키. */
+    public static final String TRANSFER_EMERGENCY_STOP = "WX:TRANSFER:EMERGENCY_STOP:";
+
     /** 송금 요청 멱등 키. 같은 고객사의 같은 요청번호를 보관 시간 동안 한 건만 접수한다. */
     public static final String TRANSFER_REQUEST_PREFIX = "WX:TRANSFER:REQ:";
 

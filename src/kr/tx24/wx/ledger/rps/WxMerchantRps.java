@@ -289,7 +289,7 @@ public final class WxMerchantRps {
 
         String select = """
                 SELECT T.trxId,T.trackId,T.status,T.responseCode,T.bankCd,T.accntNo,T.sender,T.holder,T.amount,
-                       T.feeAmt,
+                       T.feeAmt,W.acqResultMsg,
                        COALESCE(NULLIF(T.bankTrxId,''),NULLIF(W.acqTrxId,'')) AS acqTrxId,
                        DATE_FORMAT(T.regDate,'%Y%m%d%H%i%s') AS requestedAt,
                        DATE_FORMAT(COALESCE(T.udtDate,T.regDate),'%Y%m%d%H%i%s') AS registeredAt,W.acqTrxDate,W.id AS ledgerId,
@@ -326,7 +326,7 @@ public final class WxMerchantRps {
             case "환입" -> originalResult("0000", "원거래 송금 완료, 환입 처리됨");
             case "접수", "대기", "예약", "처리중" -> originalResult("W00X", "처리 중");
             case "실패" -> originalResult(bankCode.matches("[0-9]{4}") && !bankCode.equals("0000")
-                    ? bankCode : "W010", "이체 실패 확정");
+                    ? bankCode : "W010", transferMap.getString("acqResultMsg", "이체 실패 확정"));
             default -> originalResult("W00X", "결과 확인 중");
         };
 

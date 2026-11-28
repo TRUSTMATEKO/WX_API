@@ -5,6 +5,7 @@ import java.util.function.Consumer;
 
 import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.map.SharedMap;
+import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.lib.redis.RedisUtils;
 import kr.tx24.wx.api.utils.ExtCode;
 import org.slf4j.Logger;
@@ -25,8 +26,7 @@ import org.slf4j.LoggerFactory;
  * 처음 쓰는 모계좌는 {@value #SEED_BALANCE}원으로 시작한다. 잔액이 모자라면 실패로 응답해
  * 선차감한 Wallet 잔액이 원복되는 경로까지 확인할 수 있다.</p>
  *
- * <p>이 값은 시험 전용이며 {@code HQ_ACCNT.balance}와 맞추지 않는다. 원장 잔액은 DB가 가진다.
- * 여기 잔액은 기관이 들고 있는 돈을 대승한 값이다.</p>
+ * <p>시험 환경의 수동·야간 모계좌 잔액 갱신은 이 값을 기준으로 원장을 대조한다.</p>
  */
 public final class HyphenStub {
 
@@ -52,10 +52,6 @@ public final class HyphenStub {
 
     /** 기관이 응답하지 않은 경우의 코드. 업무는 이 코드를 미확정으로 다룬다. */
     private static final String NO_RESPONSE = "X000";
-
-    /** 시추 잔액을 넣는 동시 호출을 한 번으로 줄이는 짧은 잠금. */
-    private static final String SEEDING_KEY = "WX:HYPHEN:TEST:SEEDING:";
-    private static final long SEEDING_TTL = 10;
 
     /** 기관 일련번호 상한. 실제 전문과 같이 여섯 자리를 넘기면 1로 돌린다. */
     private static final long SEQUENCE_LIMIT = 999999L;
@@ -165,8 +161,7 @@ public final class HyphenStub {
         String key = BALANCE_KEY + hqId;
         seed(key);
 
-        Object stored = RedisUtils.get(key);
-        long amount = stored == null ? 0L : Long.parseLong(String.valueOf(stored).trim());
+        long amount = Long.parseLong(RedisTextUtils.get(key));
         logger.debug("[시험] 더미 모계좌 잔액 조회: hqId={}, 잔액={}", hqId, amount);
         return head(hqId, DateUtils.getDate())
                 .add("acqResultCd", SUCCEEDED)
@@ -191,21 +186,10 @@ public final class HyphenStub {
                 .add("acqTrxDate", day + time);
     }
 
-    /**
-     * 시험 잔액을 없으면 만들어 둔다.
-     *
-     * <p>{@code set} 계열로 넣지 않는다. TX24_LIB 는 값을 JSON 으로 직렬화해 {@code "100000000"}
-     * 으로 저장하고, 그러면 Redis 의 {@code DECRBY} 가 정수로 읽지 못해 거절한다. 그래서
-     * {@code INCRBY} 로 잔액을 만들고, 여러 송금이 동시에 첫 잔액을 넣지 않게 짧은 잠금을 두었다.</p>
-     *
-     * <p>잔액 키를 지우면 다시 {@value #SEED_BALANCE}원으로 시작한다. 시험 잔액을 돌리는 방법이다.</p>
-     */
+    /** 기존 잔액은 유지하고 처음 쓰는 키만 Redis 정수 연산이 가능한 십진 문자열로 초기화한다. */
     private static void seed(String key) {
 
-        if (RedisUtils.get(key) != null) return;
-        if (!RedisUtils.setNx(SEEDING_KEY + key, "1", SEEDING_TTL)) return;
-        RedisUtils.incrBy(key, SEED_BALANCE);
-        logger.debug("[시험] 모계좌 시험 잔액을 {}원으로 시작한다: key={}", SEED_BALANCE, key);
+        RedisTextUtils.setNx(key, Long.toString(SEED_BALANCE));
     }
 
     /** 모계좌별 시험 일련번호. 운영과 같이 여섯 자리로 돌려 쓴다. */

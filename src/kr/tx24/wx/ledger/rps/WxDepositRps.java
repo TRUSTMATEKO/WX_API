@@ -465,6 +465,8 @@ public final class WxDepositRps {
             List<SharedMap<String, Object>> jobsList = rows(db, new Retrieve("WX.HQ_BALANCE_RETRY")
                     .columns("hqId,depositId AS id")
                     .where("retryAt<=NOW()")
+                    .where("test".equals(WalletConfig.upstreamEnv())
+                            ? "depositId LIKE 'BRT-TEST-%'" : "depositId NOT LIKE 'BRT-TEST-%'")
                     .orderBy("retryAt,hqId")
                     .limit(1)
                     .forUpdate().build());
@@ -488,6 +490,28 @@ public final class WxDepositRps {
             }
             return jobMap;
         });
+    }
+
+    /** 수동·야간 잔액조회에 사용할 모계좌 설정과 조회 전 원장 순번을 함께 읽는다. */
+    public static SharedMap<String, Object> balanceAccount(String hqId) throws SQLException {
+
+        try (Connection db = WxDatabaseRps.open()) {
+            List<SharedMap<String, Object>> bankList = rows(db, """
+                    SELECT h.settingRev,h.acq,h.acqId,h.bankCd acqBankCd,h.accntNo acqAccount,h.key2 acqKey2,
+                           h.reservedAmt,COALESCE((SELECT MAX(t.idx) FROM WX.TRX_HQ t WHERE t.hqId=h.id),0) revision
+                      FROM WX.HQ_ACCNT h WHERE h.id=? AND h.status='사용'
+                    """, hqId);
+            if (bankList.isEmpty()) return null;
+            SharedMap<String, Object> bankMap = bankList.get(0);
+            SharedMap<String, Object> jobMap = SharedMap.<String, Object>of()
+                    .add("hqId", hqId)
+                    .add("settingRev", bankMap.getLong("settingRev"))
+                    .add("revision", bankMap.getLong("revision"))
+                    .add("reservedAmt", bankMap.getLong("reservedAmt"));
+            SharedMap<String, Object> profileMap = WxTransferRps.upstream(hqId, bankMap);
+            if (profileMap != null) jobMap.put("upstream", profileMap);
+            return jobMap;
+        }
     }
 
     /** 입금 잔액 대조: 기관 조회 전에 모계좌 원장의 마지막 순번과 거래 예약을 읽는다. */
@@ -523,69 +547,107 @@ public final class WxDepositRps {
     public static SharedMap<String, Object> syncBalance(SharedMap<String, Object> jobMap, long reported, long revision)
             throws SQLException {
 
+        return transaction(db -> reconcileBalance(db, jobMap, reported, revision, ACTOR, true, null));
+    }
+
+    /** 입금 선점과 독립적으로 수동·야간 조회 차액을 모계좌 원장에 반영한다. */
+    public static SharedMap<String, Object> refreshBalance(SharedMap<String, Object> jobMap, long reported, String actor)
+            throws SQLException {
+
+        return transaction(db -> reconcileBalance(db, jobMap, reported, jobMap.getLong("revision"), actor, false, null));
+    }
+
+    /** 송금 성공 분개와 예약 해제 직후, 같은 트랜잭션에서 유효한 기관 잔액을 반영한다. */
+    public static void syncTransferBalance(Connection db, String hqId, String trxId, long booked,
+                                           SharedMap<String, Object> balanceMap, String actor) throws SQLException {
+
+        if (!balanceMap.containsKey("reportedBalance")) return;
+        long reported = balanceMap.getLong("reportedBalance");
+        if (booked == reported) return;
+        SharedMap<String, Object> jobMap = SharedMap.<String, Object>of()
+                .add("hqId", hqId)
+                .add("settingRev", balanceMap.getLong("settingRev"));
+        SharedMap<String, Object> resultMap = reconcileBalance(db, jobMap, reported,
+                balanceMap.getLong("balanceRevision"), actor, false, trxId);
+        if (!resultMap.getBoolean("deferred")) return;
+        // 동시 거래로 성공 응답의 순서를 보장할 수 없으면 현재 잔액을 다시 조회한다.
+        String prefix = "test".equals(WalletConfig.upstreamEnv()) ? "BRT-TEST-" : "BRT-PROD-";
+        scheduleBalanceReview(db, hqId, prefix + IDUtils.getUnique("B"));
+    }
+
+    private static SharedMap<String, Object> reconcileBalance(Connection db, SharedMap<String, Object> jobMap, long reported,
+                                                              long revision, String actor, boolean deposit, String transferId)
+            throws SQLException {
+
         String hqId      = jobMap.getString("hqId");
-        String depositId = jobMap.getString("id");
-        if (hqId.isBlank() || depositId.isBlank() || jobMap.isBlank("claimId") || revision < 0) {
+        String referenceId = transferId != null ? transferId : deposit ? jobMap.getString("id") : IDUtils.getUnique("B");
+        if (hqId.isBlank() || referenceId.isBlank() || (deposit && jobMap.isBlank("claimId")) || revision < 0) {
             throw new LedgerEx(LedgerCode.INVALID, "모계좌 잔액 동기화 입력을 확인해 주세요.");
         }
-        return transaction(db -> {
-            List<SharedMap<String, Object>> banksList = rows(db, new Retrieve("WX.HQ_ACCNT")
-                    .columns("id,bankCd,balance,reservedAmt,settingRev")
-                    .where("id=?")
-                    .forUpdate().build(), hqId);
-            if (banksList.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 확인해 주세요.");
-            SharedMap<String, Object> bankMap = banksList.get(0);
 
-            long                      before    = bankMap.getLong("balance");
-            long                      delta     = Math.subtractExact(reported, before);
-            SharedMap<String, Object> resultMap = SharedMap.<String, Object>of()
-                    .add("hqId", hqId)
-                    .add("before", before)
-                    .add("reported", reported)
-                    .add("delta", delta)
-                    .add("changed", false);
-            // 모계좌 행을 잠근 뒤 기관 조회 중 커밋된 분개가 있는지 현재 값을 읽는다.
-            List<SharedMap<String, Object>> latestList = rows(db, new Retrieve("WX.TRX_HQ")
-                    .columns("idx")
-                    .where("hqId=?")
-                    .orderBy("idx DESC")
-                    .limit(1)
-                    .forUpdate().build(), hqId);
-            long currentRevision = latestList.isEmpty() ? 0 : latestList.get(0).getLong("idx");
-            if (bankMap.getLong("reservedAmt") != 0 || currentRevision != revision
-                    || bankMap.getLong("settingRev") != jobMap.getLong("settingRev")) {
-                logger.info("모계좌의 거래가 진행 중이거나 원장이 변경되어 잔액 조정을 보류한다: hqId={}", hqId);
-                return resultMap.add("deferred", true);
-            }
-            // 새 입금 또는 다음 선점이 있으면 이전 응답은 폐기한다. 삭제와 원장 반영은 함께 커밋한다.
-            if (update(db, "DELETE FROM WX.HQ_BALANCE_RETRY WHERE hqId=? AND depositId=? AND claimId=?",
-                    hqId, depositId, jobMap.getString("claimId")) != 1) return resultMap.add("deferred", true);
+        List<SharedMap<String, Object>> banksList = rows(db, new Retrieve("WX.HQ_ACCNT")
+                .columns("id,bankCd,bankName,balance,reservedAmt,settingRev,status")
+                .where("id=?")
+                .forUpdate().build(), hqId);
+        if (banksList.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "모계좌를 확인해 주세요.");
+        SharedMap<String, Object> bankMap = banksList.get(0);
 
-            if (delta == 0) {
-                logger.debug("모계좌 잔액이 기관 값과 같다: hqId={}, balance={}", hqId, before);
-                return resultMap;
-            }
+        long                      before    = bankMap.getLong("balance");
+        long                      delta     = Math.subtractExact(reported, before);
+        SharedMap<String, Object> resultMap = SharedMap.<String, Object>of()
+                .add("hqId", hqId)
+                .add("before", before)
+                .add("reported", reported)
+                .add("delta", delta)
+                .add("changed", false);
+        // 모계좌 행을 잠근 뒤 기관 조회 중 커밋된 분개가 있는지 현재 값을 읽는다.
+        List<SharedMap<String, Object>> latestList = rows(db, new Retrieve("WX.TRX_HQ")
+                .columns("idx,refId")
+                .where("hqId=?")
+                .orderBy("idx DESC")
+                .limit(transferId == null ? 1 : 2)
+                .forUpdate().build(), hqId);
+        // 확정 중인 송금 자신의 출금 분개 바로 앞 순번을 접수 당시 순번과 대조한다.
+        int previous = transferId == null ? 0 : 1;
+        if (transferId != null && (latestList.isEmpty() || latestList.get(0).isNotEquals("refId", transferId))) {
+            throw new SQLException("송금 모계좌 원장 순번을 확인해 주세요.");
+        }
+        long currentRevision = latestList.size() <= previous ? 0 : latestList.get(previous).getLong("idx");
+        if ((!deposit && bankMap.isNotEquals("status", "사용")) || bankMap.getLong("reservedAmt") != 0 || currentRevision != revision
+                || bankMap.getLong("settingRev") != jobMap.getLong("settingRev")) {
+            logger.info("모계좌의 거래가 진행 중이거나 원장이 변경되어 잔액 조정을 보류한다: hqId={}", hqId);
+            return resultMap.add("deferred", true);
+        }
+        // 새 입금 또는 다음 선점이 있으면 이전 응답은 폐기한다. 삭제와 원장 반영은 함께 커밋한다.
+        if (deposit && update(db, "DELETE FROM WX.HQ_BALANCE_RETRY WHERE hqId=? AND depositId=? AND claimId=?",
+                hqId, referenceId, jobMap.getString("claimId")) != 1) return resultMap.add("deferred", true);
 
-            LocalDateTime postedAt = WxPostingRps.postingTime(db);
-            int today = WxPostingRps.businessDay(postedAt);
-            // 같은 입금으로 두 번 조정하지 않는다. UK_TRX_HQ_ACCNT_2(hqId,refType,refId) 가 막는다.
-            update(db, """
-                    INSERT INTO WX.TRX_HQ(id,hqId,status,trxType,dtlType,refType,refId,amount,balance,balanceAfter,
-                                          bankCd,bankName,summary,trxDay,trxDate,regId,regDay)
-                    VALUES(?,?,'성공',?,'잔액조정','HQ_BALANCE_SYNC',?,?,?,?,?,?,?,?,?,?,?)
-                    """, IDUtils.getUnique("H"), hqId, delta > 0 ? "입금" : "출금", depositId, delta, before,
-                    reported, bankMap.getString("bankCd"), hqBankName(db, bankMap),
-                    "입금 수신 후 기관 잔액 동기화", today, postedAt, ACTOR, today);
-            if (update(db, "UPDATE WX.HQ_ACCNT SET balance=? WHERE id=?", reported, hqId) != 1) {
-                throw new SQLException("모계좌 잔액 동기화 반영에 실패했습니다.");
-            }
-            logger.warn("모계좌 장부잔액을 기관 값으로 맞췄다. 차이를 확인해야 한다: "
-                            + "hqId={}, 장부={}, 기관={}, 차이={}, depositId={}",
-                    hqId, before, reported, delta, depositId);
-            // SharedMap.add 는 같은 키를 두 번 받지 않는다. 바꿀 때는 put 을 쓴다.
-            resultMap.put("changed", true);
+        if (delta == 0) {
+            logger.debug("모계좌 잔액이 기관 값과 같다: hqId={}, balance={}", hqId, before);
             return resultMap;
-        });
+        }
+
+        LocalDateTime postedAt = WxPostingRps.postingTime(db);
+        int today = WxPostingRps.businessDay(postedAt);
+        // 같은 입금으로 두 번 조정하지 않는다. UK_TRX_HQ_ACCNT_2(hqId,refType,refId) 가 막는다.
+        update(db, """
+                INSERT INTO WX.TRX_HQ(id,hqId,status,trxType,dtlType,refType,refId,amount,balance,balanceAfter,
+                                      bankCd,bankName,summary,trxDay,trxDate,regId,regDay)
+                VALUES(?,?,'성공',?,'잔액조정',?,?,?,?,?,?,?,?,?,?,?,?)
+                """, IDUtils.getUnique("H"), hqId, delta > 0 ? "입금" : "출금",
+                transferId == null ? "HQ_BALANCE_SYNC" : "HQ_TRANSFER_BALANCE", referenceId, delta, before,
+                reported, bankMap.getString("bankCd"), bankMap.getString("bankName"),
+                transferId != null ? "송금 성공 응답 잔액 조정" : deposit && !referenceId.startsWith("BRT-")
+                        ? "입금 수신 후 기관 잔액 동기화" : "기관 잔액 조회 조정", today, postedAt, actor, today);
+        if (update(db, "UPDATE WX.HQ_ACCNT SET balance=? WHERE id=?", reported, hqId) != 1) {
+            throw new SQLException("모계좌 잔액 동기화 반영에 실패했습니다.");
+        }
+        logger.warn("모계좌 장부잔액을 기관 값으로 맞췄다. 차이를 확인해야 한다: "
+                        + "hqId={}, 장부={}, 기관={}, 차이={}, referenceId={}",
+                hqId, before, reported, delta, referenceId);
+        // SharedMap.add 는 같은 키를 두 번 받지 않는다. 바꿀 때는 put 을 쓴다.
+        resultMap.put("changed", true);
+        return resultMap;
     }
 
     /** 입금 지정: 입금 한 건을 지정 Wallet의 확정 원장에 입금으로 반영한다. */

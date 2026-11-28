@@ -10,6 +10,7 @@ import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.ctx.WalletContext;
 import kr.tx24.wx.api.rps.WalletLedgerRps;
 import kr.tx24.wx.api.utils.NotificationUtils;
+import kr.tx24.wx.ledger.ex.LedgerEx;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -96,7 +97,15 @@ public final class TransferSvc {
 
         AtomicReference<Long> institutionStart = new AtomicReference<>();
         try {
-            UpstreamSvc               channel    = UpstreamSvc.open(upstream(acceptedMap));
+            SharedMap<String, Object> profileMap = upstream(acceptedMap);
+            try {
+                ledger.requireTransferOpen(profileMap.getString("acqBankCd"));
+            } catch (LedgerEx stopped) {
+                return SharedMap.<String, Object>of()
+                        .add("acqResultCd", "W003")
+                        .add("acqResultMsg", stopped.getMessage());
+            }
+            UpstreamSvc               channel    = UpstreamSvc.open(profileMap);
             SharedMap<String, Object> requestMap = SharedMap.<String, Object>of()
                     .add("amount", Long.toString(amount))
                     .add("recvBankCd", acceptedMap.getString("bankCd"))
@@ -161,6 +170,12 @@ public final class TransferSvc {
                 .add("acqTrxId", repliedMap.getString("acqTrxId"))
                 .add("acqTrxDate", repliedMap.getString("acqTrxDate"));
 
+        if (repliedMap.isEquals("acqResultCd", WalletPolicy.SUCCEEDED) && repliedMap.containsKey("balance")) {
+            commandMap.put("reportedBalance", repliedMap.getLong("balance"));
+            commandMap.put("balanceRevision", acceptedMap.getLong("balanceRevision"));
+            commandMap.put("settingRev", acceptedMap.getLong("settingRev"));
+        }
+
         SharedMap<String, Object> confirmedMap = null;
         try {
             SharedMap<String, Object> settledMap = ledger.confirm(commandMap, etx.getTrace());
@@ -181,10 +196,14 @@ public final class TransferSvc {
         String code = switch (status) {
             case WalletPolicy.OUTCOME_SUCCESS -> WalletPolicy.SUCCEEDED;
             case WalletPolicy.OUTCOME_UNKNOWN -> "W00X";
-            default -> repliedMap.getString("acqResultCd", "W999");
+            default -> confirmedMap == null ? "W999"
+                    : confirmedMap.getString("responseCode", repliedMap.getString("acqResultCd", "W999"));
         };
         String message = WalletPolicy.OUTCOME_UNKNOWN.equals(status)
                 ? "통신장애, 결과 확인 중" : repliedMap.getString("acqResultMsg", "처리 결과를 확인해 주세요.");
+        if (WalletPolicy.OUTCOME_FAILED.equals(status) && confirmedMap != null) {
+            message = confirmedMap.getString("acqResultMsg", message);
+        }
         SharedMap<String, Object> replyMap = WalletResult.of(code, message, etx.getTrace());
 
         replyMap.put("trxId", trxId);

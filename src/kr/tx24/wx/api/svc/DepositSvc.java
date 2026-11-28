@@ -45,6 +45,23 @@ public final class DepositSvc {
     /** 입금 통지 한 건을 기록하고 Wallet 이 하나로 정해지면 바로 반영한다. */
     public SharedMap<String, Object> receive(SharedMap<String, Object> inMap, String clientIp, String trace) {
 
+        if (inMap.isEquals("messageType", "0400100") || (inMap.isBlank("messageType")
+                && inMap.containsKey("parentAccount") && inMap.containsKey("recvAccount") && inMap.containsKey("seqNo"))) {
+            SharedMap<String, Object> noticeMap = validator.transferFailure(inMap);
+            SharedMap<String, Object> replyMap = ledger.transferFailure(noticeMap, trace);
+            if (!replyMap.getBoolean("result")) {
+                SharedMap<String, Object> refusedMap = WalletResult.ledger("transfer/failure-notify", replyMap, trace);
+                throw new WalletException(refusedMap.getString("resultCd"), refusedMap.getString("advanceMsg"));
+            }
+            SharedMap<String, Object> dataMap = replyMap.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
+            if (dataMap.getBoolean("changed") && dataMap.isEquals("beforeStatus", "성공")) {
+                kr.tx24.wx.api.utils.NotificationUtils.transferFailure(dataMap.getString("trxId"));
+            }
+            return WalletResult.of("0000", "타행이체불능명세를 반영했습니다.", trace)
+                    .add("trxId", dataMap.getString("trxId"))
+                    .add("status", dataMap.getString("status"))
+                    .add("changed", dataMap.getBoolean("changed"));
+        }
         SharedMap<String, Object> inputMap = validator.receive(inMap).add("clientIp", clientIp);
         String                    source   = inputMap.isBlank("vaAccntNo") ? "sms" : "va";
 
@@ -101,7 +118,7 @@ public final class DepositSvc {
             return false;
         }
 
-        if ("test".equals(WalletConfig.upstreamEnv())) {
+        if ("test".equals(WalletConfig.upstreamEnv()) && !depositId.startsWith("BRT-TEST-")) {
             logger.info("시험 환경이어서 모계좌 잔액을 맞추지 않는다. 더미 잔액은 원장과 무관하다: "
                     + "hqId={}, trace={}", hqId, trace);
             return false;

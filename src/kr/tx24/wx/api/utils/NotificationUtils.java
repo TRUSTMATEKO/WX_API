@@ -31,6 +31,13 @@ public final class NotificationUtils {
         sendSms("incidentAlertPhones", table, id, message, "");
     }
 
+    /** 타행이체불능명세로 성공 송금이 정정되면 설정된 운영자에게 알린다. */
+    public static void transferFailure(String trxId) {
+
+        sendSms("alert.receiver", "TRX_TRANSFER", trxId,
+                "[WX] 타행이체불능으로 송금 성공을 실패로 정정했습니다. 거래번호 " + trxId, "");
+    }
+
     /** 송금 후 잔액이 기준 이하이면 같은 모계좌에서 10분에 한 번 알린다. */
     public static void lowBalance(String hqId, long balance) {
 
@@ -44,11 +51,17 @@ public final class NotificationUtils {
 
         boolean throttled = false;
         try {
-            RecordSet records = new Retrieve().table("WX.CONFIG").columns(column).where("id", 1).select();
-            if (records == null) throw new IllegalStateException("알림 설정 조회 실패");
-            SharedMap<String, Object> configMap = records.getRow(0);
-            if (configMap == null) return;
-            List<String> recipientsList = Arrays.stream(configMap.getString(column).split(","))
+            String phones;
+            if ("alert.receiver".equals(column)) {
+                phones = System.getProperty("alert.receiver", "");
+            } else {
+                RecordSet records = new Retrieve().table("WX.CONFIG").columns(column).where("id", 1).select();
+                if (records == null) throw new IllegalStateException("알림 설정 조회 실패");
+                SharedMap<String, Object> configMap = records.getRow(0);
+                if (configMap == null) return;
+                phones = configMap.getString(column);
+            }
+            List<String> recipientsList = Arrays.stream(phones.split(",")).map(String::trim)
                     .filter(phone -> phone.matches("[0-9]{8,15}")).distinct().toList();
             if (recipientsList.isEmpty()) return;
             if (!throttleKey.isEmpty()) {
