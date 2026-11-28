@@ -189,11 +189,7 @@ public final class TransferSvc {
         replyMap.put("holder", acceptedMap.getString("holder"));
         replyMap.put("amount", acceptedMap.getLong("amount"));
 
-        // 고객사가 정산에 바로 쓰도록 이 건에 적용한 수수료를 함께 내보낸다. VAT 별도 원화 정수다.
-        replyMap.put("feeAmt", acceptedMap.getLong("feeAmt"));
-        if (!repliedMap.isBlank("acqTrxId")) {
-            replyMap.put("acqTrxId", repliedMap.getString("acqTrxId"));
-        }
+        WalletResult.addTransferFee(replyMap, acceptedMap.getLong("feeAmt"));
         if (confirmedMap != null && confirmedMap.containsKey("balance")) {
             replyMap.put("balance", confirmedMap.getLong("balance"));
             replyMap.put("availableBalance", confirmedMap.getLong("availableBalance"));

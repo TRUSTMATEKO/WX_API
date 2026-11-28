@@ -63,7 +63,7 @@ public final class WxHolderRps {
         if (!existsList.isEmpty()) {
             logger.info("예금주 조회 요청번호 중복: mchtId={}, trackId={}, trxId={}, status={}", company, track,
                     existsList.get(0).getString("trxId"), existsList.get(0).getString("status"));
-            throw new LedgerEx(LedgerCode.CONFLICT, "이미 접수된 요청번호입니다.");
+            throw new LedgerEx(LedgerCode.DUPLICATE_REQUEST, "이미 접수된 요청번호입니다.");
         }
 
         List<SharedMap<String, Object>> walletList = rows(db, """
@@ -71,7 +71,7 @@ public final class WxHolderRps {
                   FROM WX.WALLET w
                  WHERE w.id=? AND w.mchtId=? AND w.ownerType='MCHT' AND w.status='사용' AND w.apiStatus='사용'
                 """, walletId, company);
-        if (walletList.size() != 1) throw new LedgerEx(LedgerCode.CONFLICT, "Wallet 사용 상태를 확인해 주세요.");
+        if (walletList.size() != 1) throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
 
         // 기관 연동 설정은 접수 전에 확인한다. 보낼 수 없는 요청을 과금 대상으로 남기지 않는다.
         List<SharedMap<String, Object>> bankList = rows(db, """
@@ -81,7 +81,7 @@ public final class WxHolderRps {
         if (bankList.size() != 1) {
             logger.info("모계좌 사용 상태가 아니어서 예금주 조회를 접수하지 않는다: hqId={}",
                     walletList.get(0).getString("hqId"));
-            throw new LedgerEx(LedgerCode.CONFLICT, "예금주 조회를 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+            throw new LedgerEx(LedgerCode.REQUEST_UNAVAILABLE, "예금주 조회를 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
         }
 
         SharedMap<String, Object> upstreamMap = upstream(bankList.get(0));

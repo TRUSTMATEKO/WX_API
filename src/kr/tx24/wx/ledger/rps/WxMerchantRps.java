@@ -103,14 +103,19 @@ public final class WxMerchantRps {
 
         String                          walletId   = keyMap.getString("walletId");
         List<SharedMap<String, Object>> walletList = rows(db, """
-                SELECT B.balance,B.available AS availableBalance
+                SELECT B.balance,B.available AS availableBalance,W.status,W.apiStatus
                   FROM WX.WALLET W JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
-                 WHERE W.id=? AND W.mchtId=? AND W.ownerType='MCHT' AND W.status='사용' AND W.apiStatus='사용'
+                 WHERE W.id=? AND W.mchtId=? AND W.ownerType='MCHT'
                 """, walletId, company);
         if (walletList.size() != 1) {
-            logger.info("Wallet 사용 상태가 아니어서 거절: mchtId={}, walletId={}, operation={}",
+            logger.info("API 키에 연결된 고객사 Wallet을 찾을 수 없어 거절: mchtId={}, walletId={}, operation={}",
                     company, walletId, inMap.getString("operation"));
-            throw new LedgerEx(LedgerCode.CONFLICT, "API 키의 Wallet 연결을 확인해 주세요.");
+            throw new LedgerEx(LedgerCode.KEY_WALLET_ERROR, "API 키의 Wallet 연결을 확인해 주세요.");
+        }
+
+        SharedMap<String, Object> walletMap = walletList.get(0);
+        if (!walletMap.isEquals("status", "사용") || !walletMap.isEquals("apiStatus", "사용")) {
+            throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
         }
 
         String action = inMap.getString("operation");
@@ -118,7 +123,7 @@ public final class WxMerchantRps {
             // 인증 때와 업무 때의 Wallet 이 다르다. 그 사이에 키 연결이 바뀐 것이다.
             logger.info("인증 후 Wallet 연결이 바뀌어 거절: mchtId={}, 인증={}, 현재={}, operation={}",
                     company, inMap.getString("walletId"), walletId, action);
-            throw new LedgerEx(LedgerCode.CONFLICT, "API 키의 Wallet 연결이 변경되었습니다.");
+            throw new LedgerEx(LedgerCode.KEY_WALLET_ERROR, "API 키의 Wallet 연결이 변경되었습니다.");
         }
 
         switch (action) {
@@ -126,7 +131,9 @@ public final class WxMerchantRps {
                 return SharedMap.<String, Object>of()
                         .add("walletId", walletId);
             case "balance":
-                return walletList.get(0);
+                return SharedMap.<String, Object>of()
+                        .add("balance", walletMap.getLong("balance"))
+                        .add("availableBalance", walletMap.getLong("availableBalance"));
             case "inquiry":
                 return inquiry(db, inMap, company, walletId);
             case "payout":
@@ -323,7 +330,7 @@ public final class WxMerchantRps {
         }
         if (isStopped(rulesList.get(0), WxPostingRps.postingTime(db).toLocalTime())) {
             logger.info("운영시간 정책에 따라 접수 중지: apiCode={}", apiCode);
-            throw new LedgerEx(LedgerCode.UNAVAILABLE, "API 운영시간 정책에 따라 접수가 중지되었습니다.");
+            throw new LedgerEx(LedgerCode.UNAVAILABLE, "API 운영시간 정책에 따라 송금이 중지되었습니다.");
         }
     }
 

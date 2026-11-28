@@ -340,7 +340,7 @@
         "properties": {
           "resultCd": {
             "type": "string",
-            "description": "0000 정상, W001 요청값·checksum 오류, W002 인증·접속 IP 오류, W003 접수 중지, W004 Wallet 설정 오류, W009 거래 없음, W999 원장 연결 또는 내부 오류."
+            "description": "0000 정상, W001 요청값 또는 형식 오류, W002 인증실패, W003 운영중지시간, W004 거래 조건 미충족, W005 기관 전송 전 오류, W006~W008 미배정, W009 조회 대상 거래 없음, W010 거래 처리 실패, W011 중복 요청, W012 출금 한도 초과, W013 API 키 연결 오류, W014 Wallet 사용 중지, W015 출금가능잔액 부족, W016 거래 접수 불가, W00X 통신장애, W999 시스템 내부 오류, X000 통신장애, 기타 기관 코드 기관 요청 처리 실패."
           },
           "resultMsg": {
             "type": "string",
@@ -409,12 +409,17 @@
             ],
             "description": "이체가능잔액(원). 잔액 조회는 현재 장부잔액에서 예약액과 보류액을 뺍니다. 송금·결과 조회는 원거래 직후 값이며 미기록 시 null입니다."
           },
-          "acqTrxId": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "기관 거래번호"
+          "feeAmt": {
+            "type": "integer",
+            "description": "송금 건별 수수료 공급가액(원)"
+          },
+          "feeVat": {
+            "type": "integer",
+            "description": "feeAmt의 10%를 원 단위로 반올림한 건별 부가세(원)"
+          },
+          "fee": {
+            "type": "integer",
+            "description": "부가세 포함 건별 수수료(원). feeAmt + feeVat"
           },
           "rootResultCd": {
             "type": "string",
@@ -426,7 +431,7 @@
           },
           "walletId": {
             "type": "string",
-            "description": "인증을 통과한 API 키에 연결된 Wallet ID. 인증·Wallet 설정 오류에서는 제공하지 않습니다."
+            "description": "인증을 통과한 API 키에 연결된 Wallet ID. W002, W004 및 W011~W016 응답에서는 생략합니다."
           },
           "traceId": {
             "type": "string",

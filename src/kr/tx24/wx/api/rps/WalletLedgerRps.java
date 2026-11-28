@@ -280,10 +280,9 @@ public final class WalletLedgerRps {
         try {
             return ok(WxMerchantRps.query(inMap));
         } catch (LedgerEx refused) {
-            // 거절 사유를 남긴다. 고객사 응답은 일반 문구로 바뀌므로 여기 안 남기면 원인을 찾을 길이 없다.
             logger.info("원장 조회 거절: operation={}, code={}, reason={}, trace={}",
                     operation, refused.getCode().getCode(), refused.getMessage(), trace);
-            return error(refused);
+            return merchantError(refused);
         } catch (Exception failure) {
             logger.info("원장 조회 실패: operation={}, type={}, trace={}",
                     operation, failure.getClass().getSimpleName(), trace);
@@ -319,6 +318,25 @@ public final class WalletLedgerRps {
         return SharedMap.<String, Object>of()
                 .add("result", true)
                 .add("data", dataMap == null ? SharedMap.<String, Object>of() : dataMap);
+    }
+
+    /** 고객사 거래 거절에는 원장의 세부 사유에 해당하는 Wallet 응답 코드를 함께 담는다. */
+    private static SharedMap<String, Object> merchantError(LedgerEx refused) {
+
+        SharedMap<String, Object> errorMap = error(refused);
+        if (errorMap.isEquals("code", "TX409")) {
+            String walletCode = switch (refused.getCode()) {
+                case DUPLICATE_REQUEST    -> "W011";
+                case LIMIT_EXCEEDED       -> "W012";
+                case KEY_WALLET_ERROR     -> "W013";
+                case WALLET_UNAVAILABLE   -> "W014";
+                case INSUFFICIENT_BALANCE -> "W015";
+                case REQUEST_UNAVAILABLE  -> "W016";
+                default                   -> "W004";
+            };
+            errorMap.put("walletCode", walletCode);
+        }
+        return errorMap;
     }
 
     /** 업무 거절. 원장이 정한 코드와 공개 문구만 담는다. */

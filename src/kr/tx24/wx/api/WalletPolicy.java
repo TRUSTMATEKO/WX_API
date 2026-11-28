@@ -45,8 +45,8 @@ public final class WalletPolicy {
             "sender", "holder", "note", "checksum");
 
     /** 거래조회 응답에 복사하는 원장 필드. */
-    public static final Set<String> TRANSFER_RESULT_FIELDS = Set.of("trxId", "trackId", "acqTrxId", "status",
-            "bankCd", "accntNo", "sender", "holder", "amount", "feeAmt", "requestedAt", "createAt", "balance",
+    public static final Set<String> TRANSFER_RESULT_FIELDS = Set.of("trxId", "trackId", "status",
+            "bankCd", "accntNo", "sender", "holder", "amount", "requestedAt", "createAt", "balance",
             "availableBalance");
 
     /** 송금 금액 상한. 전문 자릿수와 무관하게 입력 단계에서 먼저 막는다. */

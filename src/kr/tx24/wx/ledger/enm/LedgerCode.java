@@ -10,7 +10,7 @@ package kr.tx24.wx.ledger.enm;
  * <p>코드 문자열은 WX_ADM {@code kr.tx24.wx.enm.ResultCode}의 같은 이름 값과 **같아야 한다.**
  * {@code WalletResult.ledger}의 분기가 이 문자열을 읽는다. 다만 그 쪽은 화면 전용 값
  * ({@code OK}, {@code LOGIN_EXPIRED}, {@code TWO_FA_REQUIRED}, {@code RATE_LIMITED})까지 가진 반면
- * 원장은 아래 여섯 개만 쓴다. 원장이 로그인이나 2차 인증을 판단하지 않기 때문이다.</p>
+ * 원장은 여섯 가지 내부 코드와 거래 거절의 세부 사유를 쓴다. 원장이 로그인이나 2차 인증을 판단하지 않기 때문이다.</p>
  */
 public enum LedgerCode {
 
@@ -29,11 +29,24 @@ public enum LedgerCode {
     /** 상태·잔액·중복 때문에 지금 처리할 수 없다. */
     CONFLICT("TX409", "요청 상태가 올바르지 않습니다."),
 
+    // 고객사 거래 거절의 세부 사유. 내부 원장 코드는 모두 TX409를 유지한다.
+    DUPLICATE_REQUEST(CONFLICT),
+    LIMIT_EXCEEDED(CONFLICT),
+    KEY_WALLET_ERROR(CONFLICT),
+    WALLET_UNAVAILABLE(CONFLICT),
+    INSUFFICIENT_BALANCE(CONFLICT),
+    REQUEST_UNAVAILABLE(CONFLICT),
+
     /** 설정이나 운영시간 정책 때문에 접수를 중지했다. */
     UNAVAILABLE("TX503", "현재 서비스를 이용할 수 없습니다.");
 
     private final String code;
     private final String message;
+
+    LedgerCode(LedgerCode category) {
+
+        this(category.code, category.message);
+    }
 
     LedgerCode(String code, String message) {
 

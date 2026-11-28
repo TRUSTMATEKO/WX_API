@@ -1,6 +1,7 @@
 package kr.tx24.wx.api.svc;
 
 import kr.tx24.inet.mapper.Autowired;
+import kr.tx24.lib.lang.MaskUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletResult;
@@ -13,11 +14,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.util.Set;
 
 /** 고객사 Wallet API의 접근 확인, 요청 이력, 업무 실행과 응답을 처리한다. */
 public final class WalletFlowSvc {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletFlowSvc.class);
+
+    /** 인증 및 거래 거절 응답에서 Wallet ID를 생략하는 코드다. */
+    private static final Set<String> HIDDEN_WALLET_CODES = Set.of("W002", "W004", "W011", "W012", "W013", "W014",
+            "W015", "W016");
 
     private final WalletValidator validator;
     private final TransferValidator transferValidator;
@@ -93,6 +99,7 @@ public final class WalletFlowSvc {
             // 송금은 인증된 Wallet과 지급 전문으로 서명을 확인한 뒤에만 선차감할 수 있다.
             switch (action) {
                 case "payout" -> {
+                    logTransferRequest(etx);
                     transferValidator.isTransferable(etx);
                     replyMap = transferSvc.transfer(etx);
                 }
@@ -116,14 +123,25 @@ public final class WalletFlowSvc {
         return respond(etx, replyMap);
     }
 
+    /** 송금 요청의 서명 확인과 원장 접수 전에 주문번호와 수취 계좌를 추적 로그에 남긴다. */
+    private static void logTransferRequest(WalletContext etx) {
+
+        SharedMap<String, Object> inputMap = etx.getInput();
+        String accntNo = inputMap.getString("accntNo");
+        String masked  = accntNo.length() < 5 ? "*".repeat(accntNo.length()) : MaskUtils.account(accntNo);
+
+        logger.info("송금 요청: walletId={}, trackId={}, bankCd={}, accntNo={}, trace={}",
+                etx.getWalletId(), inputMap.getString("trackId"), inputMap.getString("bankCd"), masked, etx.getTrace());
+    }
+
     /**
      * 인증이 끝난 뒤의 응답에는 확정된 Wallet을 함께 돌려준다.
      *
-     * <p>인증 실패({@code W002})와 설정·거래 거절({@code W004}) 응답에서는 Wallet ID를 생략한다.</p>
+     * <p>인증 실패({@code W002})와 거래 조건 거절 응답에서는 Wallet ID를 생략한다.</p>
      */
     private static SharedMap<String, Object> respond(WalletContext etx, SharedMap<String, Object> replyMap) {
 
-        if (etx.isAuthorized() && !replyMap.isEquals("resultCd", "W002") && !replyMap.isEquals("resultCd", "W004")) {
+        if (etx.isAuthorized() && !HIDDEN_WALLET_CODES.contains(replyMap.getString("resultCd"))) {
             replyMap.put("walletId", etx.getWalletId());
         }
         return replyMap;

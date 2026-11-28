@@ -23,7 +23,7 @@ h1,h2,h3{line-height:1.35}h1{margin:3px 0}h2{margin:2rem 0 .7rem}h3{margin:1.3re
 <h1 id="overview">WX Wallet API</h1><p>REST 규격 v0.6.0 · TX24_DOC Wallet 기준</p>
 <p>모든 요청에 <code>Authorization: wk_…</code>와 <code>Content-Type: application/json</code>을 사용합니다.
 인증 키로 고객사를 확인하고, 등록된 접속 IP를 검사한 뒤 키와 연결된 Wallet으로 처리합니다.</p>
-<p>응답의 <code>walletId</code>에 키와 연결된 Wallet ID가 들어갑니다. 인증 및 Wallet 설정 오류에서는 Wallet ID를 반환하지 않습니다.</p>
+<p>응답의 <code>walletId</code>에 키와 연결된 Wallet ID가 들어갑니다. W002, W004 및 W011~W016 응답에서는 Wallet ID를 생략합니다.</p>
 <div class="table"><table><thead><tr><th>기능</th><th>POST 경로</th><th>필수 JSON 필드</th></tr></thead><tbody>
 <tr><td>잔액 조회</td><td><code>/api/v1/wallet/balance</code></td><td>빈 객체 <code>{}</code></td></tr>
 <tr><td>예금주 조회</td><td><code>/api/v1/wallet/holder</code></td><td><code>trackId</code>, <code>bankCd</code>, <code>accntNo</code></td></tr>
@@ -41,7 +41,7 @@ h1,h2,h3{line-height:1.35}h1{margin:3px 0}h2{margin:2rem 0 .7rem}h3{margin:1.3re
 <pre><code>{"trackId":"H001","bankCd":"004","accntNo":"0000000000"}</code></pre>
 <p>기관 조회가 성공하면 기관이 확인한 예금주명을 <code>holder</code>에 제공합니다.</p>
 <h3>현재 응답</h3>
-<pre><code>{"resultCd":"W003","resultMsg":"접수 중지","advanceMsg":"HYPHEN 기관 연결 준비 중으로 접수가 중지되었습니다.","createAt":"20261120103000","traceId":"WXTEST01","walletId":"SAMPLE-WALLET"}</code></pre>
+<pre><code>{"resultCd":"W003","resultMsg":"운영중지시간","advanceMsg":"기관 연동 설정이 없어 예금주 조회가 중지되었습니다.","createAt":"20261120103000","traceId":"WXTEST01","walletId":"SAMPLE-WALLET"}</code></pre>
 <h2 id="transfer">송금 요청</h2>
 <pre><code>{
   "trackId": "T001", "bankCd": "004", "accntNo": "0000000000", "amount": 1000,
@@ -68,14 +68,17 @@ def transfer_checksum(api_key, wallet_id, request):
 <p>위 요청의 테스트 벡터는 <code>SAMPLE-WALLET</code>과 문서 예제용 키 <code>wk_example_for_documentation_only</code>로 계산했습니다.
 서명이 없거나 형식이 틀리거나 요청값과 일치하지 않으면 <code>W001</code>을 반환합니다.</p>
 <h3>현재 응답</h3>
-<pre><code>{"resultCd":"W003","resultMsg":"접수 중지","advanceMsg":"HYPHEN 기관 연결 준비 중으로 접수가 중지되었습니다.","createAt":"20261120103000","traceId":"WXTEST01","walletId":"SAMPLE-WALLET"}</code></pre>
+<pre><code>{"resultCd":"W003","resultMsg":"운영중지시간","advanceMsg":"API 운영시간 정책에 따라 송금이 중지되었습니다.","createAt":"20261120103000","traceId":"WXTEST01","walletId":"SAMPLE-WALLET"}</code></pre>
 <h3>송금 거래를 반환할 때의 응답 형식</h3>
 <pre><code>{
   "resultCd":"0000", "resultMsg":"정상", "advanceMsg":"정상이체", "traceId":"WXTEST01",
-  "walletId":"SAMPLE-WALLET", "trxId":"WX2601123456", "trackId":"T001", "acqTrxId":"261120000123",
+  "walletId":"SAMPLE-WALLET", "trxId":"WX2601123456", "trackId":"T001",
+  "feeAmt":301, "feeVat":30, "fee":331,
   "status":"success", "bankCd":"004", "accntNo":"00000***00", "sender":"상점명", "holder":"홍길동", "amount":1000,
   "requestedAt":"20261120103002", "createAt":"20261120103004", "balance":99000, "availableBalance":null
 }</code></pre>
+<p><code>feeAmt</code>는 송금 건별 수수료 공급가액입니다. <code>feeVat</code>는 공급가액의 10%를 원 단위로 반올림한 부가세이며,
+<code>fee</code>는 두 금액의 합계입니다. 일마감에서는 고객사 누적 공급가액으로 부가세를 계산하므로 건별 부가세의 합과 차이가 날 수 있습니다.</p>
 <p><code>accntNo</code>에는 마스킹한 수취 계좌번호만 제공합니다. 거래 시각은 서울 기준 <code>yyyyMMddHHmmss</code> 문자열입니다.</p>
 <ul>
 <li><code>requestedAt</code>은 원거래의 <code>TRX_TRANSFER.reqDate</code>입니다.</li>
@@ -91,7 +94,8 @@ def transfer_checksum(api_key, wallet_id, request):
 <pre><code>{
   "resultCd":"0000", "resultMsg":"정상", "advanceMsg":"정상조회", "traceId":"WXTEST02",
   "rootResultCd":"0000", "rootResultMsg":"정상이체",
-  "walletId":"SAMPLE-WALLET", "trxId":"WX2601123456", "trackId":"T001", "acqTrxId":"261120000123",
+  "walletId":"SAMPLE-WALLET", "trxId":"WX2601123456", "trackId":"T001",
+  "feeAmt":301, "feeVat":30, "fee":331,
   "status":"success", "bankCd":"004", "accntNo":"00000***00", "sender":"상점명", "holder":"홍길동", "amount":1000,
   "requestedAt":"20261120103002", "createAt":"20261120103004", "balance":99000, "availableBalance":null
 }</code></pre>
@@ -151,13 +155,26 @@ hook=%7B%22eventType%22%3A%22transfer.settled%22%2C...%7D</code></pre>
 <code>resultMsg</code>는 간략한 결과이고, <code>advanceMsg</code>는 상세 결과입니다.
 잔액·예금주 조회 및 원거래를 반환하지 않는 응답에서 <code>createAt</code>은 서울 기준 응답 생성 시각입니다.
 POST 이외의 메서드는 HTTP <code>405</code>입니다.</p>
-<div class="table"><table><thead><tr><th>코드</th><th>의미</th></tr></thead><tbody>
-<tr><td><code>0000</code></td><td>정상</td></tr><tr><td><code>W001</code></td><td>요청 필드 또는 형식 오류</td></tr>
-<tr><td><code>W002</code></td><td>인증 키 또는 허용 IP 오류</td></tr>
-<tr><td><code>W003</code></td><td>API 운영시간 또는 기관 준비로 접수 중지</td></tr>
-<tr><td><code>W004</code></td><td>키에 연결된 Wallet 설정 오류</td></tr>
-<tr><td><code>W009</code></td><td>조회 거래 없음</td></tr>
-<tr><td><code>W999</code></td><td>원장 연결 또는 내부 오류</td></tr>
+<div class="table"><table><thead><tr><th>resultCd</th><th>resultMsg</th></tr></thead><tbody>
+<tr><td><code>0000</code></td><td>정상</td></tr>
+<tr><td><code>W001</code></td><td>요청값 또는 형식 오류</td></tr>
+<tr><td><code>W002</code></td><td>인증실패</td></tr>
+<tr><td><code>W003</code></td><td>운영중지시간</td></tr>
+<tr><td><code>W004</code></td><td>거래 조건 미충족</td></tr>
+<tr><td><code>W005</code></td><td>기관 전송 전 오류</td></tr>
+<tr><td><code>W006</code>~<code>W008</code></td><td>미배정</td></tr>
+<tr><td><code>W009</code></td><td>조회 대상 거래 없음</td></tr>
+<tr><td><code>W010</code></td><td>거래 처리 실패</td></tr>
+<tr><td><code>W011</code></td><td>중복 요청</td></tr>
+<tr><td><code>W012</code></td><td>출금 한도 초과</td></tr>
+<tr><td><code>W013</code></td><td>API 키 연결 오류</td></tr>
+<tr><td><code>W014</code></td><td>Wallet 사용 중지</td></tr>
+<tr><td><code>W015</code></td><td>출금가능잔액 부족</td></tr>
+<tr><td><code>W016</code></td><td>거래 접수 불가</td></tr>
+<tr><td><code>W00X</code></td><td>통신장애</td></tr>
+<tr><td><code>W999</code></td><td>시스템 내부 오류</td></tr>
+<tr><td><code>X000</code></td><td>통신장애</td></tr>
+<tr><td>기타 기관 코드</td><td>기관 요청 처리 실패</td></tr>
 </tbody></table></div>
 <h2 id="current">현재 가동 범위</h2>
 <p class="note">잔액 조회와 원거래 조회를 제공합니다. 송금과 예금주 조회는 HYPHEN 시험 연결 전까지 접수 중지 상태(<code>W003</code>)로 응답합니다.

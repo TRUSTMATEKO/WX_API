@@ -33,15 +33,23 @@ public final class WalletResult {
 
         String resultMsg = switch (code) {
             case "0000" -> "정상";
-            case "W001" -> "요청 오류";
-            case "W002" -> "인증 실패";
-            case "W003" -> "접수 중지";
-            case "W004" -> "설정 오류";
-            case "W005" -> "처리 전 오류";
-            case "W009" -> "거래 없음";
-            case "W00X" -> "결과 확인 중";
-            case "W999" -> "시스템 오류";
-            default -> "처리 실패";
+            case "W001" -> "요청값 또는 형식 오류";
+            case "W002" -> "인증실패";
+            case "W003" -> "운영중지시간";
+            case "W004" -> "거래 조건 미충족";
+            case "W005" -> "기관 전송 전 오류";
+            case "W009" -> "조회 대상 거래 없음";
+            case "W010" -> "거래 처리 실패";
+            case "W011" -> "중복 요청";
+            case "W012" -> "출금 한도 초과";
+            case "W013" -> "API 키 연결 오류";
+            case "W014" -> "Wallet 사용 중지";
+            case "W015" -> "출금가능잔액 부족";
+            case "W016" -> "거래 접수 불가";
+            case "W00X" -> "통신장애";
+            case "W999" -> "시스템 내부 오류";
+            case "X000" -> "통신장애";
+            default -> "기관 요청 처리 실패";
         };
 
         return SharedMap.<String, Object>of()
@@ -88,6 +96,7 @@ public final class WalletResult {
                     for (String name : WalletPolicy.TRANSFER_RESULT_FIELDS) {
                         replyMap.put(name, dataMap.getOrDefault(name, NullNode.getInstance()));
                     }
+                    addTransferFee(replyMap, dataMap.getLong("feeAmt"));
                 }
             }
 
@@ -105,10 +114,20 @@ public final class WalletResult {
             case "TX400" -> of("W001", reason.isBlank() ? "요청값을 확인해 주세요." : reason, trace);
             case "TX401", "TX403" -> of("W002", "Wallet 인증 또는 접속 IP 확인에 실패했습니다.", trace);
             case "TX404" -> of("W009", reason.isBlank() ? "거래를 찾을 수 없습니다." : reason, trace);
-            case "TX409" -> of("W004", reason.isBlank() ? "요청을 처리하지 못했습니다." : reason, trace);
+            case "TX409" -> of(internalMap.getString("walletCode", "W004"),
+                    reason.isBlank() ? "요청을 처리하지 못했습니다." : reason, trace);
             case "TX503" -> of("W003", reason.isBlank() ? "요청 접수가 중지되었습니다." : reason, trace);
             default -> of("W999", "원장 응답을 확인해 주세요.", trace);
         };
+    }
+
+    /** 송금 및 결과 조회에 건별 공급가액과 WX_TASK의 원 단위 반올림을 적용한 부가세, 합계를 담는다. */
+    public static void addTransferFee(SharedMap<String, Object> replyMap, long feeAmt) {
+
+        long feeVat = feeAmt / 10 + (feeAmt % 10 >= 5 ? 1 : 0);
+        replyMap.add("feeAmt", feeAmt)
+                .add("feeVat", feeVat)
+                .add("fee", Math.addExact(feeAmt, feeVat));
     }
 
     /** Wallet 업무 응답은 엔드포인트에 허용된 원장 필드만 복사한다. */

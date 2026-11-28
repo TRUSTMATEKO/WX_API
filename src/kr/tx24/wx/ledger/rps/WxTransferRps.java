@@ -73,7 +73,7 @@ public final class WxTransferRps {
         String idempotent = LedgerKeys.transferRequest(company, track);
         if (!RedisUtils.setNx(idempotent, now.toString(), REQUEST_TTL)) {
             logger.info("송금 중복 요청 차단: mchtId={}, trackId={}", company, track);
-            throw new LedgerEx(LedgerCode.CONFLICT, "같은 요청번호가 처리 중입니다. 원거래 조회로 결과를 확인해 주세요.");
+            throw new LedgerEx(LedgerCode.DUPLICATE_REQUEST, "같은 요청번호가 처리 중입니다. 원거래 조회로 결과를 확인해 주세요.");
         }
         try {
             return register(db, inMap, company, walletId, track, bankCd, accntNo, amount, day, now);
@@ -91,15 +91,15 @@ public final class WxTransferRps {
 
         List<SharedMap<String, Object>> existsList = rows(db, "SELECT trxId,status FROM WX.TRX_TRANSFER WHERE mchtId=? AND trackId=?", company, track);
         if (!existsList.isEmpty()) {
-            logger.info("송금 요청번호 중복: mchtId={}, trackId={}, trxId={}, status={}", company, track,
+            logger.info("송금 주문번호 중복: mchtId={}, trackId={}, trxId={}, status={}", company, track,
                     existsList.get(0).getString("trxId"), existsList.get(0).getString("status"));
-            throw new LedgerEx(LedgerCode.CONFLICT, "이미 접수된 요청번호입니다. 원거래 조회로 결과를 확인해 주세요.");
+            throw new LedgerEx(LedgerCode.DUPLICATE_REQUEST, "이미 요청된 주문번호입니다. 원거래 조회로 결과를 확인해 주세요.");
         }
 
         // 일별 마감과 같은 순서로 모계좌를 먼저 잠그고 Wallet의 귀속을 다시 확인한다.
         List<SharedMap<String, Object>> ownerList = rows(db, "SELECT hqId FROM WX.WALLET WHERE id=? AND mchtId=?",
                 walletId, company);
-        if (ownerList.isEmpty()) throw new LedgerEx(LedgerCode.CONFLICT, "Wallet 사용 상태를 확인해 주세요.");
+        if (ownerList.isEmpty()) throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
         String                          hqId     = ownerList.get(0).getString("hqId");
         List<SharedMap<String, Object>> bankList = rows(db, new Retrieve("WX.HQ_ACCNT")
                 .columns("id,balance,reservedAmt,balance-reservedAmt AS payable,alarmBalance,acq,acqId")
@@ -109,7 +109,7 @@ public final class WxTransferRps {
         // 문구에 모계좌를 드러내지 않는다. 고객사가 알 일이 아니고 사유는 원장 로그에 남는다.
         if (bankList.size() != 1) {
             logger.info("모계좌 사용 상태가 아니어서 송금을 접수하지 않는다: hqId={}", hqId);
-            throw new LedgerEx(LedgerCode.CONFLICT, "송금을 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+            throw new LedgerEx(LedgerCode.REQUEST_UNAVAILABLE, "송금을 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
         }
         List<SharedMap<String, Object>> walletList = rows(db, new Retrieve("WX.WALLET w")
                 .columns("w.id,w.mchtId,w.hqId,w.editRev")
@@ -118,7 +118,7 @@ public final class WxTransferRps {
                 .where("w.id=? AND w.mchtId=? AND w.hqId=? AND w.ownerType='MCHT'")
                 .where("w.status='사용' AND w.apiStatus='사용'")
                 .forUpdate().build(), walletId, company, hqId);
-        if (walletList.size() != 1) throw new LedgerEx(LedgerCode.CONFLICT, "Wallet 사용 상태를 확인해 주세요.");
+        if (walletList.size() != 1) throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
         SharedMap<String, Object> accountMap = walletList.get(0);
 
         SharedMap<String, Object> rateMap = fee(db, company, day, amount);
@@ -132,13 +132,13 @@ public final class WxTransferRps {
         long available = accountMap.getLong("available");
         if (available < amount) {
             logger.info("송금 잔액 부족: walletId={}, amount={}, available={}", walletId, amount, available);
-            throw new LedgerEx(LedgerCode.CONFLICT, "출금가능잔액이 부족합니다.");
+            throw new LedgerEx(LedgerCode.INSUFFICIENT_BALANCE, "출금가능잔액이 부족합니다.");
         }
 
         if (bankList.get(0).getLong("payable") < amount) {
             logger.warn("모계좌 송금 가능액 부족: hqId={}, amount={}, payable={}",
                     hqId, amount, bankList.get(0).getLong("payable"));
-            throw new LedgerEx(LedgerCode.UNAVAILABLE, "송금 접수가 일시 중지되었습니다. 잠시 후 다시 시도해 주세요.");
+            throw new LedgerEx(LedgerCode.UNAVAILABLE, "송금 요청이 일시 중지되었습니다. 잠시 후 다시 시도해 주세요.");
         }
 
         // 기관 연동 설정은 차감 전에 확인한다. 보낼 수 없는 요청을 접수하면 잔액만 묶인다.
@@ -326,7 +326,7 @@ public final class WxTransferRps {
         long once = settingsMap.getLong("limitOnce");
         if (once > 0 && amount > once) {
             logger.info("송금 건당 한도 초과: walletId={}, amount={}, limitOnce={}", walletId, amount, once);
-            throw new LedgerEx(LedgerCode.CONFLICT, "건당 출금한도를 초과했습니다.");
+            throw new LedgerEx(LedgerCode.LIMIT_EXCEEDED, "건당 출금한도를 초과했습니다.");
         }
         long dayLimit   = settingsMap.getLong("limitDay");
         long monthLimit = settingsMap.getLong("limitMonth");
@@ -342,12 +342,12 @@ public final class WxTransferRps {
         if (dayLimit > 0 && usedMap.getLong("dayAmt") + amount > dayLimit) {
             logger.info("송금 일 한도 초과: walletId={}, used={}, amount={}, limitDay={}",
                     walletId, usedMap.getLong("dayAmt"), amount, dayLimit);
-            throw new LedgerEx(LedgerCode.CONFLICT, "일 출금한도를 초과했습니다.");
+            throw new LedgerEx(LedgerCode.LIMIT_EXCEEDED, "일 출금한도를 초과했습니다.");
         }
         if (monthLimit > 0 && usedMap.getLong("monthAmt") + amount > monthLimit) {
             logger.info("송금 월 한도 초과: walletId={}, used={}, amount={}, limitMonth={}",
                     walletId, usedMap.getLong("monthAmt"), amount, monthLimit);
-            throw new LedgerEx(LedgerCode.CONFLICT, "월 출금한도를 초과했습니다.");
+            throw new LedgerEx(LedgerCode.LIMIT_EXCEEDED, "월 출금한도를 초과했습니다.");
         }
     }
 
