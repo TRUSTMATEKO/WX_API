@@ -21,31 +21,33 @@ import kr.tx24.wx.api.WalletException;
 public final class DepositValidator {
 
     /** 입금 통지 한 건을 검증한다. */
-    public SharedMap<String, Object> receive(SharedMap<String, Object> in) {
+    public SharedMap<String, Object> receive(SharedMap<String, Object> inMap) {
 
-        long amount = in.getLong("amount");
+        long amount = inMap.getLong("amount");
         if (amount <= 0) throw new WalletException("W001", "입금액을 확인해 주세요.");
-        String virtual = optional(in, "vaAccntNo", 32);
-        String master  = optional(in, "hqAccntNo", 32);
+
+        String virtual = optional(inMap, "vaAccntNo", 32);
+        String master  = optional(inMap, "hqAccntNo", 32);
         if (virtual.isEmpty() == master.isEmpty()) {
             throw new WalletException("W001", "가상계좌번호 또는 모계좌번호 하나만 보내 주세요.");
         }
+
         return SharedMap.<String, Object>of()
                 .add("vaAccntNo", virtual)
                 .add("hqAccntNo", master)
-                .add("depositName", text(in, "depositName", 128))
-                .add("occurredAt", text(in, "occurredAt", 14))
+                .add("depositName", text(inMap, "depositName", 128))
+                .add("occurredAt", text(inMap, "occurredAt", 14))
                 .add("amount", amount)
                 // 같은 번호의 모계좌가 둘 이상일 때만 필요하다. 통지가 알려 주면 함께 쓴다.
-                .add("bankCd", optional(in, "bankCd", 12))
+                .add("bankCd", optional(inMap, "bankCd", 12))
                 // 통지 원문. 있으면 암호문으로 보관한다. 줄바꿈을 허용한다.
-                .add("payload", raw(in, "payload", 4096));
+                .add("payload", raw(inMap, "payload", 4096));
     }
 
     /** 필수 문자열: 공백·길이·제어문자를 확인하고 원문을 유지한다. */
-    private static String text(SharedMap<String, Object> in, String field, int max) {
+    private static String text(SharedMap<String, Object> inMap, String field, int max) {
 
-        String value = in.getString(field).strip();
+        String value = inMap.getString(field).strip();
         if (value.isEmpty() || value.length() > max || value.chars().anyMatch(Character::isISOControl)) {
             throw new WalletException("W001", field + " 값을 확인해 주세요.");
         }
@@ -53,9 +55,9 @@ public final class DepositValidator {
     }
 
     /** 선택 문자열: 비어 있어도 되지만 길이와 제어문자는 같은 기준으로 본다. */
-    private static String optional(SharedMap<String, Object> in, String field, int max) {
+    private static String optional(SharedMap<String, Object> inMap, String field, int max) {
 
-        String value = in.getString(field).strip();
+        String value = inMap.getString(field).strip();
         if (value.length() > max || value.chars().anyMatch(Character::isISOControl)) {
             throw new WalletException("W001", field + " 값을 확인해 주세요.");
         }
@@ -63,9 +65,9 @@ public final class DepositValidator {
     }
 
     /** 통지 원문: 줄바꿈을 허용하고 길이와 널 문자만 본다. */
-    private static String raw(SharedMap<String, Object> in, String field, int max) {
+    private static String raw(SharedMap<String, Object> inMap, String field, int max) {
 
-        String value = in.getString(field);
+        String value = inMap.getString(field);
         if (value.length() > max || value.indexOf('\0') >= 0) {
             throw new WalletException("W001", field + " 값을 확인해 주세요.");
         }

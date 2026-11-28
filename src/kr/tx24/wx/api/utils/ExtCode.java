@@ -4,14 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import kr.tx24.lib.lang.CommonUtils;
 import kr.tx24.lib.lang.SystemUtils;
 import kr.tx24.lib.map.LinkedMap;
-import kr.tx24.lib.map.MapFactory;
-import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.lib.mapper.JacksonUtils;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 
 public class ExtCode {
@@ -23,7 +19,6 @@ public class ExtCode {
     private static final String KTFC      = "KTFC";
     private static final String FCS       = "FCS";
     private static final String PISP      = "PISP";
-    private static final String KCB       = "KCB";
     private static final String DEFAULT_MESSAGE = "미정의,";
     private static final String NET_ERROR_CODE = "X000";
     private static final String NET_ERROR_MESSAGE = "통신장애";
@@ -43,8 +38,8 @@ public class ExtCode {
         }else {
 
             int size = 0;
-            for (Map<String, String> m : rawMap.values()) {
-                size += m.size();
+            for (Map<String, String> mMap : rawMap.values()) {
+                size += mMap.size();
             }
 
             LinkedMap<String, String> tempMap = new LinkedMap<>(size + (size >> 2));
@@ -59,15 +54,6 @@ public class ExtCode {
             }
 
             CODE_MAP = tempMap;
-        }
-    }
-
-    public static String getBankName(String bankCode){
-        Object obj = CODE_MAP.get(BANK+DELIMITER+ CommonUtils.nToB(bankCode));
-        if(obj == null){
-            return DEFAULT_MESSAGE+CommonUtils.nToB(bankCode);
-        }else{
-            return CommonUtils.toString(obj);
         }
     }
 
@@ -91,10 +77,6 @@ public class ExtCode {
 
     public static String getPISP(String code) {
         return getCodeMessage(PISP, code);
-    }
-
-    public static String getKCB(String code) {
-        return getCodeMessage(KCB, code);
     }
 
     private static String getCodeMessage(String category, String code) {

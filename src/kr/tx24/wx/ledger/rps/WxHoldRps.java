@@ -1,4 +1,4 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.rps;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -6,14 +6,18 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static kr.tx24.wx.ledger.WxDatabaseRps.rows;
-import static kr.tx24.wx.ledger.WxDatabaseRps.update;
+import kr.tx24.wx.ledger.enm.LedgerCode;
+import kr.tx24.wx.ledger.ex.LedgerEx;
+
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.rows;
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.update;
 
 /**
  * 고객사 Wallet의 자금 보류를 설정하고 해제한다.
@@ -52,16 +56,16 @@ public final class WxHoldRps {
      * <p>장부잔액보다 큰 보류도 받는다. 분쟁 금액이 잔액을 넘을 수 있고, 프로시저가
      * {@code GREATEST(0, ...)}로 출금가능잔액을 0까지만 내리므로 음수가 생기지 않는다.</p>
      *
-     * @param in {@code walletId}, {@code amount}, {@code userId}, {@code reason}
+     * @param inMap {@code walletId}, {@code amount}, {@code userId}, {@code reason}
      * @return 변경 전후 보류액과 다시 계산한 잔액
      */
-    public static SharedMap<String, Object> apply(SharedMap<String, Object> in) throws SQLException {
+    public static SharedMap<String, Object> apply(SharedMap<String, Object> inMap) throws SQLException {
 
-        String walletId = WxPostingRps.field(in, "walletId", 32);
-        String actor    = WxPostingRps.field(in, "userId", 24);
-        String reason   = WxPostingRps.field(in, "reason", 512);
-        String accessIp = in.getString("clientIp");
-        long   target   = in.getLong("amount");
+        String walletId = WxPostingRps.field(inMap, "walletId", 32);
+        String actor    = WxPostingRps.field(inMap, "userId", 24);
+        String reason   = WxPostingRps.field(inMap, "reason", 512);
+        String accessIp = inMap.getString("clientIp");
+        long   target   = inMap.getLong("amount");
         if (target < 0 || target > AMOUNT_MAX) {
             throw new LedgerEx(LedgerCode.INVALID, "보류 금액을 확인해 주세요.");
         }
@@ -70,9 +74,10 @@ public final class WxHoldRps {
             db.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             db.setAutoCommit(false);
             try {
-                SharedMap<String, Object> result = post(db, walletId, target, reason, actor, accessIp);
+                SharedMap<String, Object> resultMap = post(db, walletId, target, reason, actor, accessIp);
                 db.commit();
-                return result;
+
+                return resultMap;
             } catch (RuntimeException | SQLException | Error failure) {
                 db.rollback();
                 throw failure;
@@ -89,11 +94,11 @@ public final class WxHoldRps {
     private static SharedMap<String, Object> post(Connection db, String walletId, long target, String reason,
             String actor, String accessIp) throws SQLException {
 
-        SharedMap<String, Object> wallet = lock(db, walletId);
-        long before = wallet.getLong("held");
+        SharedMap<String, Object> walletMap = lock(db, walletId);
+        long                      before    = walletMap.getLong("held");
         if (before == target) {
             logger.info("보류 금액이 이미 같아 바꾸지 않는다: walletId={}, held={}", walletId, before);
-            return result(wallet, before, target, false);
+            return result(walletMap, before, target, false);
         }
 
         if (update(db, "UPDATE WX.WALLET_BALANCE SET held=?,udtId=? WHERE walletId=?",
@@ -107,7 +112,7 @@ public final class WxHoldRps {
         update(db, """
                 INSERT INTO WX.WALLET_HOLD(id,mchtId,walletId,beforeAmt,afterAmt,reason,regId,regDay,regDate)
                 VALUES(?,?,?,?,?,?,?,?,?)
-                """, IDUtils.getUnique("H"), wallet.getString("mchtId"), walletId, before, target, reason,
+                """, IDUtils.getUnique("H"), walletMap.getString("mchtId"), walletId, before, target, reason,
                 actor, WxPostingRps.businessDay(now), now);
 
         // 자금 처리와 같은 형식으로 변경 전후와 접속 IP 를 남긴다.
@@ -115,11 +120,13 @@ public final class WxHoldRps {
                 INSERT INTO WX.AUDIT(id,mchtId,unit,action,refType,refId,reason,beforeJson,afterJson,accessIp,
                                      regId,regDay)
                 VALUES(?,?,'HQ',?,'WALLET',?,?,?,?,?,?,?)
-                """, IDUtils.getRandom(32), wallet.getString("mchtId"),
+                """, IDUtils.getRandom(32), walletMap.getString("mchtId"),
                 target > before ? "WALLET_HOLD_SET" : "WALLET_HOLD_RELEASE",
                 walletId, reason,
-                JacksonUtils.get().toJson(SharedMap.<String, Object>of().add("held", before)),
-                JacksonUtils.get().toJson(SharedMap.<String, Object>of().add("held", target)),
+                JacksonUtils.get().toJson(SharedMap.<String, Object>of()
+                        .add("held", before)),
+                JacksonUtils.get().toJson(SharedMap.<String, Object>of()
+                        .add("held", target)),
                 accessIp, actor, WxPostingRps.businessDay(now));
 
         logger.info("Wallet 보류 변경: walletId={}, {} -> {}, actor={}", walletId, before, target, actor);
@@ -129,16 +136,15 @@ public final class WxHoldRps {
     /** 보류 대상 Wallet의 잔액 행을 잠근다. 고객사 Wallet만 보류할 수 있다. */
     private static SharedMap<String, Object> lock(Connection db, String walletId) throws SQLException {
 
-        List<SharedMap<String, Object>> found = rows(db, """
-                SELECT W.id,W.mchtId,B.balance,B.held,B.available
-                  FROM WX.WALLET W JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
-                 WHERE W.id=? AND W.ownerType='MCHT'
-                 FOR UPDATE
-                """, walletId);
-        if (found.size() != 1) {
+        List<SharedMap<String, Object>> foundList = rows(db, new Retrieve("WX.WALLET W")
+                .columns("W.id,W.mchtId,B.balance,B.held,B.available")
+                .joinInner("WX.WALLET_BALANCE B", "B.walletId=W.id")
+                .where("W.id=? AND W.ownerType='MCHT'")
+                .forUpdate().build(), walletId);
+        if (foundList.size() != 1) {
             throw new LedgerEx(LedgerCode.CONFLICT, "고객사 Wallet만 보류할 수 있습니다.");
         }
-        return found.get(0);
+        return foundList.get(0);
     }
 
     /** 출금가능잔액 재계산. 프로시저 한 곳만 이 계산식을 가진다. */
@@ -151,16 +157,16 @@ public final class WxHoldRps {
     }
 
     /** 응답 공통: 변경 전후 보류액과 다시 계산한 잔액을 담는다. */
-    private static SharedMap<String, Object> result(SharedMap<String, Object> wallet, long before, long after,
+    private static SharedMap<String, Object> result(SharedMap<String, Object> walletMap, long before, long after,
             boolean changed) {
 
         return SharedMap.<String, Object>of()
-                .add("walletId", wallet.getString("id"))
-                .add("mchtId", wallet.getString("mchtId"))
+                .add("walletId", walletMap.getString("id"))
+                .add("mchtId", walletMap.getString("mchtId"))
                 .add("beforeAmt", before)
                 .add("afterAmt", after)
-                .add("balance", wallet.getLong("balance"))
-                .add("availableBalance", wallet.getLong("available"))
+                .add("balance", walletMap.getLong("balance"))
+                .add("availableBalance", walletMap.getLong("available"))
                 .add("changed", changed);
     }
 }

@@ -19,9 +19,8 @@ public final class WalletContext {
     private String keyHash = "";
     private String walletId = "";
     private byte[] body;
-    private SharedMap<String, Object> input;
-    private SharedMap<String, Object> io;
-    private SharedMap<String, Object> ledger;
+    private SharedMap<String, Object> inputMap;
+    private SharedMap<String, Object> ioMap;
 
     /** 요청 수신 값만으로 컨텍스트를 만든다. 나머지는 계층이 채운다. */
     public WalletContext(String action, String authorization, String clientIp, String contentType, String trace) {
@@ -94,34 +93,23 @@ public final class WalletContext {
     /** 검증을 통과한 요청 필드. */
     public SharedMap<String, Object> getInput() {
 
-        return input;
+        return inputMap;
     }
 
-    public void setInput(SharedMap<String, Object> input) {
+    public void setInput(SharedMap<String, Object> inputMap) {
 
-        this.input = input;
+        this.inputMap = inputMap;
     }
 
     /** API 요청 이력(`TRX_IO`) 기록 값. `ioId`와 `requestHash`를 담는다. */
     public SharedMap<String, Object> getIo() {
 
-        return io;
+        return ioMap;
     }
 
-    public void setIo(SharedMap<String, Object> io) {
+    public void setIo(SharedMap<String, Object> ioMap) {
 
-        this.io = io;
-    }
-
-    /** 송금 접수로 원장이 돌려준 값. 기관 전송 입력과 응답 작성에 쓴다. */
-    public SharedMap<String, Object> getLedger() {
-
-        return ledger;
-    }
-
-    public void setLedger(SharedMap<String, Object> ledger) {
-
-        this.ledger = ledger;
+        this.ioMap = ioMap;
     }
 
     /** 인증이 끝났는지. 끝난 뒤의 실패 응답에는 `walletId`를 함께 돌려준다. */

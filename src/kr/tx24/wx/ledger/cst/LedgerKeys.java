@@ -1,4 +1,4 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.cst;
 
 /**
  * 원장이 쓰는 Redis 키다.
@@ -7,9 +7,6 @@ package kr.tx24.wx.ledger;
  * 담지 않는다. 키 문자열은 WX_ADM과 같아야 한다. 같은 큐를 두 프로세스가 본다.</p>
  */
 public final class LedgerKeys {
-
-    /** 송금 통신장애 재조회 대기 큐. OPL의 OPL:TRANSFER:ERROR_BOX와 같은 역할이다. */
-    public static final String TRANSFER_ERROR_BOX      = "WX:TRANSFER:ERROR_BOX";
 
     /** 송금 요청 멱등 키. 같은 고객사의 같은 요청번호를 보관 시간 동안 한 건만 접수한다. */
     public static final String TRANSFER_REQUEST_PREFIX = "WX:TRANSFER:REQ:";
@@ -21,12 +18,6 @@ public final class LedgerKeys {
      * WX_TASK 의 {@code hook.HookConstants} 와 글자 그대로 같아야 한다. 같은 큐를 두 프로세스가 본다.</p>
      */
     public static final String WEBHOOK_QUEUE           = "WX:TASK:HOOK";
-
-    /** 웹훅 재시도 예약. 발송 실패 건의 다음 시각을 점수로 둔 Sorted Set 이다. */
-    public static final String WEBHOOK_RETRY           = "WX:TASK:HOOK:RETRY";
-
-    /** 웹훅 한 건의 선점·결과 키 접두. TX24_EXT 가 이 키에 전송 결과를 저장한다. */
-    public static final String WEBHOOK_STATE_PREFIX    = "WX:TASK:HOOK:STATE:";
 
     private LedgerKeys() {
 

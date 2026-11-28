@@ -44,6 +44,7 @@ public final class WalletContextLoader {
             if (bytes.length > WalletPolicy.FRAME) {
                 throw new WalletException("W001", "요청 본문이 8,192바이트를 초과했습니다.");
             }
+
             etx.setBody(bytes);
             etx.setIo(SharedMap.<String, Object>of()
                     .add("ioId", UUID.randomUUID().toString().replace("-", ""))
@@ -53,11 +54,12 @@ public final class WalletContextLoader {
                     .add("apiCode", etx.getAction().equals("payout") ? "transfer" : etx.getAction())
                     .add("requestHash", HexFormat.of().formatHex(
                             MessageDigest.getInstance("SHA-256").digest(bytes))));
+
             ledger.recordIo(etx.getIo(), etx.getTrace());
         } catch (WalletException refused) {
             throw refused;
         } catch (Exception failure) {
-            logger.warn("API 요청 접수 이력 저장 실패, 업무를 진행하지 않는다: action={}, trace={}",
+            logger.error("API 요청 접수 이력 저장 실패, 업무를 진행하지 않는다: action={}, trace={}",
                     etx.getAction(), etx.getTrace(), failure);
             throw new WalletException("W999", "API 요청 이력을 확인해 주세요.", failure);
         }
@@ -69,17 +71,33 @@ public final class WalletContextLoader {
      * <p>저장이 실패해도 업무 결과를 바꾸지 않는다. 이력 행은 접수로 남아 운영자가 확인한다.
      * 종전에는 이 실패가 성공한 송금까지 {@code W999}로 바꿨다.</p>
      */
-    public void close(WalletContext etx, SharedMap<String, Object> reply) {
+    public void close(WalletContext etx, SharedMap<String, Object> replyMap) {
 
         if (etx.getIo() == null) return;
+
         try {
             etx.getIo().put("phase", "completed");
-            etx.getIo().put("resultCd", reply.getString("resultCd"));
+            etx.getIo().put("resultCd", replyMap.getString("resultCd"));
+            etx.getIo().put("resultMsg", message(replyMap));
+
             ledger.recordIo(etx.getIo(), etx.getTrace());
         } catch (Exception failure) {
             logger.error("API 요청 완료 이력 저장 실패, 업무 결과는 그대로 반환한다: action={}, ioId={}, resultCd={}, trace={}",
-                    etx.getAction(), etx.getIo().getString("ioId"), reply.getString("resultCd"),
+                    etx.getAction(), etx.getIo().getString("ioId"), replyMap.getString("resultCd"),
                     etx.getTrace(), failure);
         }
+    }
+
+    /**
+     * 이력에 남길 결과 문구를 고른다.
+     *
+     * <p>응답은 문구를 둘 보낸다. {@code resultMsg}는 코드별 고정 문구(`요청 오류`)여서 응답코드에서
+     * 그대로 나오고, {@code advanceMsg}가 거절 사유를 말한다. 운영자가 보려는 쪽은 사유이므로
+     * 사유를 먼저 쓰고 비었을 때만 고정 문구를 쓴다. 길이는 원장이 열 길이로 자른다.</p>
+     */
+    private static String message(SharedMap<String, Object> replyMap) {
+
+        String advance = replyMap.getString("advanceMsg").strip();
+        return advance.isEmpty() ? replyMap.getString("resultMsg").strip() : advance;
     }
 }

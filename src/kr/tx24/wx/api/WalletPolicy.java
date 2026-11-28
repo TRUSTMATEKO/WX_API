@@ -1,5 +1,7 @@
 package kr.tx24.wx.api;
 
+import java.nio.charset.Charset;
+import java.time.ZoneId;
 import java.util.Set;
 
 /**
@@ -9,6 +11,14 @@ import java.util.Set;
  * 여러 계층이 같이 보는 값만 둔다. 설정에서 읽는 값은 {@link WalletConfig}에 있다.</p>
  */
 public final class WalletPolicy {
+
+    private static final Charset HYPHEN_CHARSET = Charset.forName("KSC5601");
+
+    /** Wallet 업무와 기관 연동의 기준 시간대. */
+    public static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
+
+    /** 원장에서 읽은 참조 설정의 고정 Redis 만료 시간. */
+    public static final long REFERENCE_CACHE_SECONDS = 600L;
 
     /** 기관 전문이 응답 없이 끝난 경우의 코드. HyphenPisp가 요청 전문에 심어 돌려준다. */
     public static final String NO_RESPONSE = "X000";
@@ -26,17 +36,6 @@ public final class WalletPolicy {
 
     /** 내부 응답 프레임 상한과 고객사 요청 본문 상한. 두 값이 같아야 한다. */
     public static final int FRAME = 8192;
-
-    /** 조회성 내부 호출 제한. */
-    public static final int QUERY_TIMEOUT = 5000;
-
-    /**
-     * 원장 확정 내부 호출 제한.
-     *
-     * <p>기관 읽기 상한 15초보다 넉넉히 두어 확정 호출이 먼저 끊기지 않게 한다.
-     * 확정 호출이 끊기면 결과를 아는데도 미확정으로 남는다.</p>
-     */
-    public static final int LEDGER_TIMEOUT = 20000;
 
     /** 송금 checksum 서명 접두. 고객사와 공유하는 고정 문자열이다. */
     public static final String TRANSFER_SIGNATURE = "WX-WALLET-TRANSFER-V1";
@@ -58,5 +57,14 @@ public final class WalletPolicy {
 
     private WalletPolicy() {
 
+    }
+
+    /** HYPHEN 헤더의 업체코드는 공백 없이 KSC5601로 표현 가능한 1~8바이트다. */
+    public static boolean isValidAcqSid(String acqSid) {
+
+        return acqSid != null && !acqSid.isEmpty()
+                && acqSid.codePoints().noneMatch(code -> Character.isWhitespace(code) || Character.isISOControl(code))
+                && HYPHEN_CHARSET.newEncoder().canEncode(acqSid)
+                && acqSid.getBytes(HYPHEN_CHARSET).length <= 8;
     }
 }

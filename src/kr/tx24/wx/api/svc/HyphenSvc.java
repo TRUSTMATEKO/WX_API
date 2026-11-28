@@ -1,5 +1,9 @@
 package kr.tx24.wx.api.svc;
 
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Consumer;
+
 import kr.tx24.wx.api.hyphen.KRWHead;
 import kr.tx24.wx.api.hyphen.HyphenPisp;
 import kr.tx24.wx.api.hyphen.HyphenStub;
@@ -11,39 +15,33 @@ import kr.tx24.wx.api.utils.NotificationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * 기관 전문을 보내는 단일 창구다.
- *
- * <p>모계좌 설정의 {@code env}가 {@code prod}면 HYPHEN과 실제로 통신하고, {@code test}면
- * {@link HyphenStub}의 더미 응답을 쓴다. 분기를 여기 한 고데만 두어 업무 계층은 시험과 운영에서
- * 같은 코드를 탄다. 그렇지 않으면 시험에서 맞춘 것이 운영을 보증하지 못한다.</p>
- */
+/** 모계좌 환경에 따라 HYPHEN 운영 전문 또는 시험 응답을 처리한다. */
 public final class HyphenSvc {
 
     private static final Logger logger = LoggerFactory.getLogger(HyphenSvc.class);
 
-    private final SharedMap<String, Object> profile;
+    private final SharedMap<String, Object> profileMap;
 
     /** 기관 연동용 보호 프로필을 준비한다. {@code env} 가 test 면 전문을 보내지 않는다. */
-    public HyphenSvc(SharedMap<String, Object> profile) {
+    public HyphenSvc(SharedMap<String, Object> profileMap) {
 
-        if (!profile.getBoolean("upstream.enabled")
-                || !java.util.Set.of("test", "prod").contains(profile.getString("env"))
-                || !profile.getString("hqId").matches("[A-Za-z0-9_-]{1,24}")
-                || !profile.getString("acqSid").matches("[A-Za-z0-9_-]{1,32}")
-                || !profile.getString("acqBankCd").matches("[0-9]{2,3}")
-                || !profile.getString("acqAccount").matches("[0-9]{1,20}") || profile.getString("acqKey2").isBlank()) {
+        if (!profileMap.getBoolean("upstream.enabled")
+                || !Set.of("test", "prod").contains(profileMap.getString("env"))
+                || !profileMap.getString("hqId").matches("[A-Za-z0-9_-]{1,24}")
+                || !WalletPolicy.isValidAcqSid(profileMap.getString("acqSid"))
+                || !profileMap.getString("acqBankCd").matches("[0-9]{2,3}")
+                || !profileMap.getString("acqAccount").matches("[0-9]{1,20}") || profileMap.getString("acqKey2").isBlank()) {
             throw new IllegalArgumentException("HYPHEN 보호 프로필을 확인하세요.");
         }
-        this.profile = profile.copy();
+        this.profileMap = profileMap.copy();
     }
 
     /** 직접 송금: 호출자는 영속 예약·기관 거래 식별자·재조회 계약을 확보한 뒤 한 번만 호출한다. */
-    public SharedMap<String, Object> transfer(SharedMap<String, Object> input, java.util.function.Consumer<String> recordBeforeSend) {
+    public SharedMap<String, Object> transfer(SharedMap<String, Object> inputMap, Consumer<String> recordBeforeSend) {
 
-        String amount  = input.getString("amount");
-        String bank    = input.getString("recvBankCd");
-        String account = input.getString("recvAccount");
+        String amount  = inputMap.getString("amount");
+        String bank    = inputMap.getString("recvBankCd");
+        String account = inputMap.getString("recvAccount");
         if (!amount.matches("[1-9][0-9]{0,11}") || !bank.matches("[0-9]{3}") || !account.matches("[0-9]{1,20}")) {
             throw new IllegalArgumentException("기관 지급 입력을 확인하세요.");
         }
@@ -52,35 +50,45 @@ public final class HyphenSvc {
                 .data("sign", "+")
                 .data("recvBankCd", bank)
                 .data("recvAccount", account)
-                .data("sender", input.getString("sender"))
-                .data("description", input.getString("description"));
-        java.util.Objects.requireNonNull(recordBeforeSend);
+                .data("sender", inputMap.getString("sender"))
+                .data("description", inputMap.getString("description"));
+        Objects.requireNonNull(recordBeforeSend);
         if (isTest()) {
             // 시험 환경은 기관에 전문을 보내지 않는다. 원거래번호 기록과 잔액 차감은 그대로 따른다.
             return warnLowBalance(
-                    HyphenStub.transfer(profile.getString("hqId"), Long.parseLong(amount), recordBeforeSend));
+                    HyphenStub.transfer(profileMap.getString("hqId"), Long.parseLong(amount), recordBeforeSend));
         }
         HyphenPisp client = new HyphenPisp() {
             @Override
             public byte[] execute(byte[] bytes) {
 
                 KRWHead head = new KRWHead(bytes);
-                if (!head.getTrxDay().matches("[0-9]{8}") || !head.getSeqNo().matches("[0-9]{6}"))
+                if (!head.getTrxDay().matches("[0-9]{8}") || !head.getSeqNo().matches("[0-9]{6}")) {
                     throw new IllegalStateException("기관 원거래번호 확인 실패");
-                recordBeforeSend.accept(head.getTrxDay().substring(2)+head.getSeqNo());
+                }
+                // 이 번호로 장애 거래를 재조회하므로 기록에 실패하면 소켓에 전문을 쓰기 전에 중단한다.
+                recordBeforeSend.accept(head.getTrxDay().substring(2) + head.getSeqNo());
                 return super.execute(bytes);
             }
         };
+
         return warnLowBalance(new SharedMap<>(client.transfer(command)));
     }
 
     /** WX 예금주 조회에서 HYPHEN 기본 계좌명 조회 전문을 구성한다. */
-    public SharedMap<String,Object> holder(String bank,String account) {
+    public SharedMap<String, Object> holder(String bank, String account) {
 
-        if (bank==null || !bank.matches("[0-9]{3}") || account==null || !account.matches("[0-9]{1,20}"))
+        if (bank == null || !bank.matches("[0-9]{3}") || account == null || !account.matches("[0-9]{1,20}")) {
             throw new IllegalArgumentException("예금주 조회 계좌를 확인하세요.");
-        if (isTest()) return HyphenStub.holder(profile.getString("hqId"), bank, account);
-        return new SharedMap<>(new HyphenPisp().holder(request().data("recvBankCd",bank).data("recvAccount",account)));
+        }
+        if (isTest()) {
+            return HyphenStub.holder(profileMap.getString("hqId"), bank, account);
+        }
+
+        INet command = request()
+                .data("recvBankCd", bank)
+                .data("recvAccount", account);
+        return new SharedMap<>(new HyphenPisp().holder(command));
     }
 
     /** 본사 미결 송금 확인에 원거래 기관번호를 사용해 HYPHEN 결과 조회 전문을 구성한다. */
@@ -89,14 +97,20 @@ public final class HyphenSvc {
         if (acqTrxId == null || !acqTrxId.matches("[0-9]{12}")) {
             throw new IllegalArgumentException("기관 원거래번호의 일자 6자리와 일련번호 6자리를 확인하세요.");
         }
-        if (isTest()) return HyphenStub.transferResult(profile.getString("hqId"), acqTrxId);
+        if (isTest()) {
+            return HyphenStub.transferResult(profileMap.getString("hqId"), acqTrxId);
+        }
+
         return new SharedMap<>(new HyphenPisp().inquery(request().data("acqTrxId", acqTrxId)));
     }
 
     /** 직접 잔액조회: 동일한 보호 프로필의 본사 계좌를 사용한다. */
     public SharedMap<String, Object> balance() {
 
-        if (isTest()) return HyphenStub.balance(profile.getString("hqId"));
+        if (isTest()) {
+            return HyphenStub.balance(profileMap.getString("hqId"));
+        }
+
         return new SharedMap<>(new HyphenPisp().balance(request()));
     }
 
@@ -110,20 +124,22 @@ public final class HyphenSvc {
      * <p>경고와 SMS 발송을 처리하고 이번 지급은 그대로 끝낸다. 다음 지급을 받을지는
      * 원장이 모계좌 지급 가능액으로 판정한다. 로그에는 모계좌 계좌번호 원문을 남기지 않는다.</p>
      */
-    private SharedMap<String, Object> warnLowBalance(SharedMap<String, Object> replied) {
+    private SharedMap<String, Object> warnLowBalance(SharedMap<String, Object> repliedMap) {
 
-        if (!WalletPolicy.SUCCEEDED.equals(replied.getString("acqResultCd")) || !replied.containsKey("balance")) {
-            return replied;
+        if (!WalletPolicy.SUCCEEDED.equals(repliedMap.getString("acqResultCd")) || !repliedMap.containsKey("balance")) {
+            return repliedMap;
         }
-        long balance = replied.getLong("balance");
-        long alarm   = profile.getLong("alarmBalance", 0L);
+
+        long balance = repliedMap.getLong("balance");
+        long alarm   = profileMap.getLong("alarmBalance", 0L);
         if (alarm > 0 && balance <= alarm) {
             logger.warn("모계좌 잔액이 알림 기준 이하입니다, 입금이 필요합니다: hqId={}, 은행코드={}, 계좌={}, 잔액={}원, 알림기준={}원",
-                    profile.getString("hqId"), profile.getString("acqBankCd"),
-                    MaskUtils.account(profile.getString("acqAccount")), balance, alarm);
-            NotificationUtils.lowBalance(profile.getString("hqId"), balance, alarm);
+                    profileMap.getString("hqId"), profileMap.getString("acqBankCd"),
+                    MaskUtils.account(profileMap.getString("acqAccount")), balance, alarm);
+            NotificationUtils.lowBalance(profileMap.getString("hqId"), balance);
         }
-        return replied;
+
+        return repliedMap;
     }
 
     /**
@@ -134,19 +150,19 @@ public final class HyphenSvc {
      */
     private boolean isTest() {
 
-        return profile.isEquals("env", "test");
+        return profileMap.isEquals("env", "test");
     }
 
     /** 기관 직접 호출에 공통 계좌·환경 설정을 지정한다. */
     private INet request() {
 
         return new INet()
-                .head("development", profile.isEquals("env", "test"))
+                .head("development", profileMap.isEquals("env", "test"))
                 // 기관 거래 일련번호를 모계좌별로 나누기 위해 모계좌 ID 를 함께 보낸다.
-                .data("hqId", profile.getString("hqId"))
-                .data("acqSid", profile.getString("acqSid"))
-                .data("acqBankCd", profile.getString("acqBankCd"))
-                .data("acqAccount", profile.getString("acqAccount"))
-                .data("acqKey2", profile.getString("acqKey2"));
+                .data("hqId", profileMap.getString("hqId"))
+                .data("acqSid", profileMap.getString("acqSid"))
+                .data("acqBankCd", profileMap.getString("acqBankCd"))
+                .data("acqAccount", profileMap.getString("acqAccount"))
+                .data("acqKey2", profileMap.getString("acqKey2"));
     }
 }

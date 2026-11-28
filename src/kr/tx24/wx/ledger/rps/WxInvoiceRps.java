@@ -1,18 +1,22 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.rps;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static kr.tx24.wx.ledger.WxDatabaseRps.rows;
-import static kr.tx24.wx.ledger.WxDatabaseRps.update;
+import kr.tx24.wx.ledger.enm.LedgerCode;
+import kr.tx24.wx.ledger.ex.LedgerEx;
+
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.rows;
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.update;
 
 /**
  * 월 청구서를 고객사에 청구한 것으로 종결한다.
@@ -41,16 +45,16 @@ public final class WxInvoiceRps {
     /**
      * 대기 청구서를 청구로 바꾸고 청구일을 기록한다.
      *
-     * @param in {@code invoiceId}, {@code billDay}(YYYYMMDD), {@code userId}, {@code reason}
+     * @param inMap {@code invoiceId}, {@code billDay}(YYYYMMDD), {@code userId}, {@code reason}
      * @return 청구번호와 바뀐 상태. 이미 청구된 건은 {@code changed=false}
      */
-    public static SharedMap<String, Object> bill(SharedMap<String, Object> in) throws SQLException {
+    public static SharedMap<String, Object> bill(SharedMap<String, Object> inMap) throws SQLException {
 
-        String id       = WxPostingRps.field(in, "invoiceId", 64);
-        String actor    = WxPostingRps.field(in, "userId", 24);
-        String reason   = WxPostingRps.field(in, "reason", 128);
-        String accessIp = in.getString("clientIp");
-        int    billDay  = in.getInt("billDay");
+        String id       = WxPostingRps.field(inMap, "invoiceId", 64);
+        String actor    = WxPostingRps.field(inMap, "userId", 24);
+        String reason   = WxPostingRps.field(inMap, "reason", 128);
+        String accessIp = inMap.getString("clientIp");
+        int    billDay  = inMap.getInt("billDay");
         if (billDay < 19000101 || billDay > 99991231) {
             throw new LedgerEx(LedgerCode.INVALID, "청구일을 확인해 주세요.");
         }
@@ -59,9 +63,10 @@ public final class WxInvoiceRps {
             db.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             db.setAutoCommit(false);
             try {
-                SharedMap<String, Object> result = post(db, id, billDay, reason, actor, accessIp);
+                SharedMap<String, Object> resultMap = post(db, id, billDay, reason, actor, accessIp);
                 db.commit();
-                return result;
+
+                return resultMap;
             } catch (RuntimeException | SQLException | Error failure) {
                 db.rollback();
                 throw failure;
@@ -73,18 +78,20 @@ public final class WxInvoiceRps {
     private static SharedMap<String, Object> post(Connection db, String id, int billDay, String reason,
             String actor, String accessIp) throws SQLException {
 
-        List<SharedMap<String, Object>> found = rows(db, """
-                SELECT id,mchtId,baseMonth,status,billDay,totalAmt FROM WX.STL_MONTH WHERE id=? FOR UPDATE
-                """, id);
-        if (found.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "월 청구서를 찾을 수 없습니다.");
-        SharedMap<String, Object> invoice = found.get(0);
+        List<SharedMap<String, Object>> foundList = rows(db, new Retrieve("WX.STL_MONTH")
+                .columns("id,mchtId,baseMonth,status,billDay,totalAmt")
+                .where("id=?")
+                .forUpdate().build(), id);
+        if (foundList.size() != 1) throw new LedgerEx(LedgerCode.NOT_FOUND, "월 청구서를 찾을 수 없습니다.");
+        SharedMap<String, Object> invoiceMap = foundList.get(0);
 
-        if (invoice.isEquals("status", "청구")) {
+        if (invoiceMap.isEquals("status", "청구")) {
             logger.info("이미 청구된 청구서다. 바꾸지 않는다: invoiceId={}, billDay={}",
-                    id, invoice.getInt("billDay"));
-            return result(invoice, invoice.getInt("billDay"), false);
+                    id, invoiceMap.getInt("billDay"));
+            return result(invoiceMap, invoiceMap.getInt("billDay"), false);
         }
-        if (!invoice.isEquals("status", "대기")) {
+
+        if (!invoiceMap.isEquals("status", "대기")) {
             throw new LedgerEx(LedgerCode.CONFLICT, "대기 상태의 청구서만 청구할 수 있습니다.");
         }
 
@@ -102,29 +109,31 @@ public final class WxInvoiceRps {
                 INSERT INTO WX.AUDIT(id,mchtId,unit,action,refType,refId,reason,beforeJson,afterJson,accessIp,
                                      regId,regDay)
                 VALUES(?,?,'HQ','INVOICE_BILL','STL_MONTH',?,?,?,?,NULLIF(?,''),?,?)
-                """, IDUtils.getRandom(32), invoice.getString("mchtId"), id, reason,
-                JacksonUtils.get().toJson(SharedMap.<String, Object>of().add("status", "대기")),
+                """, IDUtils.getRandom(32), invoiceMap.getString("mchtId"), id, reason,
                 JacksonUtils.get().toJson(SharedMap.<String, Object>of()
-                        .add("status", "청구").add("billDay", billDay)),
+                        .add("status", "대기")),
+                JacksonUtils.get().toJson(SharedMap.<String, Object>of()
+                        .add("status", "청구")
+                        .add("billDay", billDay)),
                 accessIp, actor, WxPostingRps.businessDay(now));
 
         logger.info("월 청구 처리: invoiceId={}, mchtId={}, baseMonth={}, billDay={}, totalAmt={}, actor={}",
-                id, invoice.getString("mchtId"), invoice.getInt("baseMonth"), billDay,
-                invoice.getLong("totalAmt"), actor);
-        return result(invoice, billDay, true);
+                id, invoiceMap.getString("mchtId"), invoiceMap.getInt("baseMonth"), billDay,
+                invoiceMap.getLong("totalAmt"), actor);
+        return result(invoiceMap, billDay, true);
     }
 
     /** 화면이 읽는 응답. 금액은 바뀌지 않으므로 확인용으로만 담는다. */
-    private static SharedMap<String, Object> result(SharedMap<String, Object> invoice, int billDay,
+    private static SharedMap<String, Object> result(SharedMap<String, Object> invoiceMap, int billDay,
             boolean changed) {
 
         return SharedMap.<String, Object>of()
-                .add("id", invoice.getString("id"))
-                .add("mchtId", invoice.getString("mchtId"))
-                .add("baseMonth", invoice.getInt("baseMonth"))
+                .add("id", invoiceMap.getString("id"))
+                .add("mchtId", invoiceMap.getString("mchtId"))
+                .add("baseMonth", invoiceMap.getInt("baseMonth"))
                 .add("status", "청구")
                 .add("billDay", billDay)
-                .add("totalAmt", invoice.getLong("totalAmt"))
+                .add("totalAmt", invoiceMap.getLong("totalAmt"))
                 .add("changed", changed);
     }
 }

@@ -17,8 +17,9 @@ import org.slf4j.LoggerFactory;
 public final class NotificationUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationUtils.class);
-    private static final String BALANCE_ALERT_KEY = "WX:API:BALANCE_ALERT:";
-    private static final long BALANCE_ALERT_INTERVAL = 600;
+    private static final String BALANCE_ALERT_KEY      = "WX:API:BALANCE_ALERT:";
+    private static final long   BALANCE_ALERT_INTERVAL = 600;
+    private static final int    SMS_MAX_LENGTH        = 90;
 
     private NotificationUtils() {
 
@@ -31,10 +32,10 @@ public final class NotificationUtils {
     }
 
     /** 송금 후 잔액이 기준 이하이면 같은 모계좌에서 10분에 한 번 알린다. */
-    public static void lowBalance(String hqId, long balance, long threshold) {
+    public static void lowBalance(String hqId, long balance) {
 
         sendSms("balanceAlertPhones", "HQ_ACCNT", hqId,
-                String.format("[WX] 모계좌 %s 잔액 %,d원, 알림 기준 %,d원. 송금 재원을 확인해 주세요.", hqId, balance, threshold),
+                String.format("[WX] 모계좌 %s 잔액 부족 %,d원", hqId, balance),
                 BALANCE_ALERT_KEY + hqId);
     }
 
@@ -45,11 +46,11 @@ public final class NotificationUtils {
         try {
             RecordSet records = new Retrieve().table("WX.CONFIG").columns(column).where("id", 1).select();
             if (records == null) throw new IllegalStateException("알림 설정 조회 실패");
-            SharedMap<String, Object> config = records.getRow(0);
-            if (config == null) return;
-            List<String> recipients = Arrays.stream(config.getString(column).split(","))
+            SharedMap<String, Object> configMap = records.getRow(0);
+            if (configMap == null) return;
+            List<String> recipientsList = Arrays.stream(configMap.getString(column).split(","))
                     .filter(phone -> phone.matches("[0-9]{8,15}")).distinct().toList();
-            if (recipients.isEmpty()) return;
+            if (recipientsList.isEmpty()) return;
             if (!throttleKey.isEmpty()) {
                 if (!RedisTextUtils.setNx(throttleKey, "1", BALANCE_ALERT_INTERVAL)) return;
                 throttled = true;
@@ -59,8 +60,9 @@ public final class NotificationUtils {
             sms.system  = "default";
             sms.table   = table;
             sms.id      = id;
-            sms.message = message;
-            sms.receiver.addAll(recipients);
+            sms.message = limitSmsMessage(message);
+            sms.receiver.addAll(recipientsList);
+
             Long size = RedisUtils.lpush(SystemUtils.REDIS_STORAGE_MESSAGE, sms);
             if (size == null || size <= 0L) throw new IllegalStateException("알림 큐 적재 실패");
         } catch (RuntimeException failure) {
@@ -68,10 +70,18 @@ public final class NotificationUtils {
                 try {
                     RedisTextUtils.del(throttleKey);
                 } catch (RuntimeException cleanupFailure) {
-                    logger.warn("잔액 알림 간격 초기화 실패: 대상={}, 오류={}", id, cleanupFailure.getClass().getSimpleName());
+                    logger.info("잔액 알림 간격 초기화 실패: 대상={}, 오류={}", id, cleanupFailure.getClass().getSimpleName());
                 }
             }
-            logger.warn("운영 알림 큐 적재 실패: 구분={}, 대상={}, 오류={}", table, id, failure.getClass().getSimpleName());
+            logger.error("운영 알림 큐 적재 실패: 구분={}, 대상={}, 오류={}", table, id, failure.getClass().getSimpleName());
         }
+    }
+
+    /** SMS 본문은 유니코드 문자 기준 90자까지 보낸다. */
+    private static String limitSmsMessage(String message) {
+
+        if (message.codePointCount(0, message.length()) <= SMS_MAX_LENGTH) return message;
+
+        return message.substring(0, message.offsetByCodePoints(0, SMS_MAX_LENGTH - 1)) + "…";
     }
 }

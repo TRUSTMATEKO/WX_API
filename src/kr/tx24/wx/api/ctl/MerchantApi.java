@@ -25,8 +25,15 @@ public final class MerchantApi {
     private static final Logger logger = LoggerFactory.getLogger(MerchantApi.class);
 
     static {
-        // Router의 컨트롤러 적재 중 실행 설정을 확정하고 전문 본문 로깅을 끈다.
-        WalletConfig.initialize();
+        // INet Router가 수신 포트를 열기 전에 컨트롤러를 초기화한다.
+        try {
+            WalletConfig.initialize();
+        } catch (ExceptionInInitializerError failure) {
+            Throwable cause = failure.getCause();
+            String message = cause instanceof IllegalStateException ? cause.getMessage() : "기동 설정 초기화 실패";
+            logger.error("WX_API 기동 중단. {}", message);
+            System.exit(1);
+        }
     }
 
     private final ChannelHandlerContext channel;
@@ -77,11 +84,13 @@ public final class MerchantApi {
             logger.info("Wallet API 접속: action={}, walletId=미확인, remoteIp=미확인, status=403", action);
             return reject(403, "허용된 게이트웨이 경로가 필요합니다.");
         }
-        INet.INMap data = request.data();
-        String remoteIp = data.getString("remoteIp").strip();
+
+        INet.INMap dataMap  = request.data();
+        String     remoteIp = dataMap.getString("remoteIp").strip();
         // 단일 IP에 쓰이는 문자만 받아 검증과 로그에 전달한다.
         if (!remoteIp.matches("[0-9A-Fa-f:.]{2,45}")) remoteIp = "";
-        if (!data.isEquals("method", "POST")) {
+
+        if (!dataMap.isEquals("method", "POST")) {
             logger.info("Wallet API 접속: action={}, walletId=미확인, remoteIp={}, status=405",
                     action, remoteIp.isEmpty() ? "미확인" : remoteIp);
             return reject(405, "POST로 요청하세요.");
@@ -90,11 +99,13 @@ public final class MerchantApi {
         // 내부 로그 상관용 번호다. 고객사가 보낸 값은 받지 않는다.
         String trace = MDC.get("traceId");
         if (trace == null || !trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
-        byte[] payload = data.getString("payload").getBytes(StandardCharsets.UTF_8);
-        SharedMap<String, Object> result = flowSvc.wallet(action, data.getString("authorization"),
-                remoteIp, data.getString("contentType"),
+
+        byte[]                    payload   = dataMap.getString("payload").getBytes(StandardCharsets.UTF_8);
+        SharedMap<String, Object> resultMap = flowSvc.wallet(action, dataMap.getString("authorization"),
+                remoteIp, dataMap.getString("contentType"),
                 new ByteArrayInputStream(payload), trace);
-        return INetUtils.response(trace, result);
+
+        return INetUtils.response(trace, resultMap);
     }
 
     /** /api/v1/wallet: 프록시 연결과 메서드 오류는 게이트웨이 HTTP 오류 형식을 사용한다. */

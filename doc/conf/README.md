@@ -10,9 +10,8 @@
 | `code.json` | 은행 코드표 |
 | `nlb.json` | 내부 호출 대상 주소. `__EXT_HOST__`·`__WX_API_HOST__`는 배포 시 채운다 |
 
-기동은 `kr.tx24.inet.server.INetServer`가 `-DCONF`의 `inet.json`을 읽어 시작한다. 파일이 없으면
-`inet.json is not found` 한 줄을 남기고 **즉시 종료**한다. 배포 시 jar만 올리고 `conf/`를 빠뜨리는
-일이 가장 흔한 기동 실패 원인이다.
+기동은 `kr.tx24.inet.server.INetServer`가 `-DCONF`의 `inet.json`을 읽고 컨트롤러 적재 중 `WX.CONFIG.apiEnv`를 확인한다.
+설정 파일이 없거나 기관 연동 환경이 유효하지 않으면 수신 포트를 열기 전에 종료한다.
 
 ## inet.json 서버 설정
 
@@ -36,9 +35,11 @@ WX_SVC 포털의 웹훅 재접수에는 JVM 시스템 속성 `portal.webhook.key
 
 ## 점검
 
+배포 서버에서 점검할 때는 저장소의 `ai/tools/VerifyWalletStartup.java`를 아래 경로에 둔다.
+
 ```bash
 java -DPROC=WX_API -DCONF=/home/tx24/WX_API/conf -cp WX_API.jar \
-     kr.tx24.wx.api.main.Launcher --check
+     ai/tools/VerifyWalletStartup.java
 ```
 
-수신 포트를 열지 않고 설정·원장 연결·업무 스키마만 확인한다. 운영 기동에는 쓰지 않는다.
+수신 포트를 열지 않고 서버 설정, 기관 연동 환경, 원장 연결과 업무 스키마를 확인한다.

@@ -59,17 +59,18 @@ public final class DepositApi {
         if (!trace.matches("[A-Za-z0-9]{8}")) trace = IDUtils.getRandom(8);
 
         try {
-            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, FRAME);
+            SharedMap<String, Object> inputMap = INetUtils.receiveInternal(channel, request, FRAME);
             // 접속 주소는 통지가 말하는 값이 아니라 실제 접속 주소를 쓴다. 감사 이력에 이 값이 남는다.
             String clientIp = NettyUtils.getRemoteAddress(channel);
-            return INetUtils.response(request, depositSvc.receive(input, clientIp, trace));
+
+            return INetUtils.response(request, depositSvc.receive(inputMap, clientIp, trace));
         } catch (SecurityException refused) {
-            logger.warn("입금 통지의 경로 또는 키를 거절했다: trace={}", trace);
+            logger.info("입금 통지의 경로 또는 키를 거절했다: trace={}", trace);
             return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
         } catch (WalletException refused) {
             return INetUtils.response(request, WalletResult.of(refused, trace));
         } catch (Exception failure) {
-            logger.warn("입금 통지 처리 실패: type={}, trace={}", failure.getClass().getSimpleName(), trace);
+            logger.info("입금 통지 처리 실패: type={}, trace={}", failure.getClass().getSimpleName(), trace);
             return INetUtils.response(request, WalletResult.of(failure, trace));
         }
     }

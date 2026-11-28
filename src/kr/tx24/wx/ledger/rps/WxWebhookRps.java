@@ -1,10 +1,11 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.rps;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.lang.IDUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.mapper.JacksonUtils;
@@ -12,8 +13,10 @@ import kr.tx24.lib.redis.RedisUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static kr.tx24.wx.ledger.WxDatabaseRps.rows;
-import static kr.tx24.wx.ledger.WxDatabaseRps.update;
+import kr.tx24.wx.ledger.cst.LedgerKeys;
+
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.rows;
+import static kr.tx24.wx.ledger.rps.WxDatabaseRps.update;
 
 /**
  * 고객사 웹훅을 발송 대기로 적재하고 발송 큐에 올린다.
@@ -64,37 +67,37 @@ public final class WxWebhookRps {
      * <p>호출자는 업무 트랜잭션을 연 상태여야 한다. 수신처가 없으면 아무것도 적재하지 않는다.
      * 그것은 오류가 아니다. 웹훅을 쓰지 않는 Wallet이다.</p>
      *
-     * @param transfer 확정 결과. {@code walletId}·{@code trxId}가 있어야 한다
+     * @param transferMap 확정 결과. {@code walletId}·{@code trxId}가 있어야 한다
      * @return 적재한 수신처 건수
      */
-    static int enqueue(Connection db, SharedMap<String, Object> transfer, String eventType,
+    static int enqueue(Connection db, SharedMap<String, Object> transferMap, String eventType,
             LocalDateTime postedAt) throws SQLException {
 
         if (db.getAutoCommit()) throw new SQLException("웹훅 적재는 업무 트랜잭션에서 수행합니다.");
 
-        String walletId = transfer.getString("walletId");
-        String trxId    = transfer.getString("trxId");
+        String walletId = transferMap.getString("walletId");
+        String trxId    = transferMap.getString("trxId");
         if (walletId.isBlank() || trxId.isBlank()) {
             throw new SQLException("웹훅 적재 대상의 Wallet 과 거래를 확인하세요.");
         }
 
-        List<SharedMap<String, Object>> hooks = rows(db, """
+        List<SharedMap<String, Object>> hooksList = rows(db, """
                 SELECT idx,endpoint FROM WX.WALLET_HOOK
                  WHERE walletId=? AND status='사용'
                  ORDER BY idx
                 """, walletId);
-        if (hooks.isEmpty()) {
+        if (hooksList.isEmpty()) {
             logger.debug("웹훅 수신처가 없어 적재하지 않는다: walletId={}, trxId={}", walletId, trxId);
             return 0;
         }
 
-        String dedupKey = trxId + ":" + eventType;
-        String payload  = WxPostingRps.encryptForLedger(JacksonUtils.get().toJson(body(transfer, eventType, postedAt)));
-        int    day      = WxPostingRps.businessDay(postedAt);
-        int    stored   = 0;
-        List<String> queued = new java.util.ArrayList<>();
+        String       dedupKey   = trxId + ":" + eventType;
+        String       payload    = WxPostingRps.encryptForLedger(JacksonUtils.get().toJson(body(transferMap, eventType, postedAt)));
+        int          day        = WxPostingRps.businessDay(postedAt);
+        int          stored     = 0;
+        List<String> queuedList = new java.util.ArrayList<>();
 
-        for (SharedMap<String, Object> hook : hooks) {
+        for (SharedMap<String, Object> hookMap : hooksList) {
             String hookId = IDUtils.getUnique("W");
             // 같은 수신처에 같은 이벤트를 두 번 쌓지 않는다. 재확정은 조용히 넘어간다.
             int changed = update(db, """
@@ -103,18 +106,18 @@ public final class WxWebhookRps {
                     VALUES(?,?,?,?,?,?,?,?,?,'대기',0,0,'WX_API',?,?)
                     ON DUPLICATE KEY UPDATE id=id
                     """,
-                    hookId, transfer.get("mchtId"), walletId, hook.getLong("idx"),
-                    trxId, eventType, dedupKey, hook.getString("endpoint"),
+                    hookId, transferMap.get("mchtId"), walletId, hookMap.getLong("idx"),
+                    trxId, eventType, dedupKey, hookMap.getString("endpoint"),
                     payload, day, postedAt);
             stored += changed;
             // 새로 적재한 건만 발송 큐에 올린다. 중복(ON DUPLICATE)은 이미 큐를 지나간 건이다.
-            if (changed == 1) queued.add(hookId);
+            if (changed == 1) queuedList.add(hookId);
         }
         // 큐 등록은 커밋 뒤에 한다. 커밋 전에 올리면 작업기가 아직 보이지 않는 행을 집어 버린다.
         // 그래서 적재한 id 만 결과에 담아 두고, 호출자가 커밋한 다음 publish 로 올린다.
-        if (!queued.isEmpty()) transfer.put(QUEUED, List.copyOf(queued));
+        if (!queuedList.isEmpty()) transferMap.put(QUEUED, List.copyOf(queuedList));
         logger.info("웹훅 발송 대기 적재: trxId={}, eventType={}, 수신처={}건, 적재={}건",
-                trxId, eventType, hooks.size(), stored);
+                trxId, eventType, hooksList.size(), stored);
         return stored;
     }
 
@@ -127,16 +130,17 @@ public final class WxWebhookRps {
      * <p>큐 등록이 실패해도 확정을 되돌리지 않는다. 적재한 행은 WX_TASK 의 복구 작업이 30초 안에
      * 찾아 큐에 올린다. 큐는 빠른 길이고 원장이 기준이다.</p>
      */
-    public static void publish(SharedMap<String, Object> result) {
+    public static void publish(SharedMap<String, Object> resultMap) {
 
-        Object value = result == null ? null : result.remove(QUEUED);
-        if (!(value instanceof List<?> ids) || ids.isEmpty()) return;
+        Object value = resultMap == null ? null : resultMap.remove(QUEUED);
+        if (!(value instanceof List<?> idsList) || idsList.isEmpty()) return;
+
         try {
-            RedisUtils.rpush(LedgerKeys.WEBHOOK_QUEUE, ids.toArray());
-            logger.info("웹훅 발송 큐 등록: count={}", ids.size());
+            RedisUtils.rpush(LedgerKeys.WEBHOOK_QUEUE, idsList.toArray());
+            logger.info("웹훅 발송 큐 등록: count={}", idsList.size());
         } catch (RuntimeException failure) {
-            logger.warn("웹훅 발송 큐 등록 실패. 복구 작업이 다시 찾는다: count={}, type={}",
-                    ids.size(), failure.getClass().getSimpleName());
+            logger.info("웹훅 발송 큐 등록 실패. 복구 작업이 다시 찾는다: count={}, type={}",
+                    idsList.size(), failure.getClass().getSimpleName());
         }
     }
 
@@ -194,17 +198,18 @@ public final class WxWebhookRps {
     }
 
     /** 고객사에 보내는 본문. 계좌번호 평문과 보호 키는 담지 않는다. */
-    private static SharedMap<String, Object> body(SharedMap<String, Object> transfer, String eventType,
+    private static SharedMap<String, Object> body(SharedMap<String, Object> transferMap, String eventType,
             LocalDateTime postedAt) {
 
-        SharedMap<String, Object> out = SharedMap.<String, Object>of()
+        SharedMap<String, Object> outMap = SharedMap.<String, Object>of()
                 .add("eventType", eventType)
-                .add("trxId", transfer.getString("trxId"))
-                .add("status", transfer.getString("status"))
-                .add("confirmedAt", postedAt.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss")));
+                .add("trxId", transferMap.getString("trxId"))
+                .add("status", transferMap.getString("status"))
+                .add("confirmedAt", DateUtils.toString(postedAt));
         for (String name : List.of("trackId", "walletId", "amount", "acqTrxId", "depositName", "sourceType")) {
-            if (transfer.containsKey(name)) out.put(name, transfer.get(name));
+            if (transferMap.containsKey(name)) outMap.put(name, transferMap.get(name));
         }
-        return out;
+
+        return outMap;
     }
 }

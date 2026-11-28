@@ -17,7 +17,7 @@ public final class InternalApiConfig {
     public static final String VERSION_KEY = "WX:CONFIG:API:VERSION";
 
     private final String columns;
-    private SharedMap<String, Object> snapshot;
+    private SharedMap<String, Object> snapshotMap;
     private long nextCheck;
     private long nextReload;
 
@@ -31,17 +31,17 @@ public final class InternalApiConfig {
     public synchronized SharedMap<String, Object> read() {
 
         long now = System.nanoTime();
-        if (snapshot != null && now - nextCheck < 0) return snapshot.copy();
-        if (snapshot != null && now - nextReload < 0) {
+        if (snapshotMap != null && now - nextCheck < 0) return snapshotMap.copy();
+        if (snapshotMap != null && now - nextReload < 0) {
             String version;
             try {
                 version = RedisTextUtils.get(VERSION_KEY);
             } catch (RuntimeException unavailable) {
                 version = null;
             }
-            if (snapshot.getString("apiConfigVersion").equals(version)) {
+            if (snapshotMap.getString("apiConfigVersion").equals(version)) {
                 nextCheck = now + TimeUnit.SECONDS.toNanos(1);
-                return snapshot.copy();
+                return snapshotMap.copy();
             }
         }
         return reload();
@@ -50,21 +50,21 @@ public final class InternalApiConfig {
     /** 버전 변경 또는 새 키 확인 시 DB에서 현재 설정을 읽는다. */
     public synchronized SharedMap<String, Object> reload() {
 
-        long now = System.nanoTime();
-        RecordSet records = new Retrieve("WX.CONFIG").columns(columns).where("id", 1).select();
-        SharedMap<String, Object> row = records == null ? null : records.getRow(0);
-        if (row == null || row.getLong("apiConfigVersion") < 1) {
+        long                      now     = System.nanoTime();
+        RecordSet                 records = new Retrieve("WX.CONFIG").columns(columns).where("id", 1).select();
+        SharedMap<String, Object> rowMap  = records == null ? null : records.getRow(0);
+        if (rowMap == null || rowMap.getLong("apiConfigVersion") < 1) {
             throw new IllegalStateException("WX API 연동 설정을 확인해 주세요.");
         }
         try {
-            RedisTextUtils.setNx(VERSION_KEY, row.getString("apiConfigVersion"));
+            RedisTextUtils.setNx(VERSION_KEY, rowMap.getString("apiConfigVersion"));
         } catch (RuntimeException unavailable) {
             // 다음 확인에서 DB를 사용한다.
         }
-        snapshot   = row;
-        nextCheck  = now + TimeUnit.SECONDS.toNanos(1);
-        nextReload = now + TimeUnit.SECONDS.toNanos(30);
-        return row.copy();
+        snapshotMap = rowMap;
+        nextCheck   = now + TimeUnit.SECONDS.toNanos(1);
+        nextReload  = now + TimeUnit.SECONDS.toNanos(30);
+        return rowMap.copy();
     }
 
     /** KMS가 원문을 반환한 경우 저장하지 않는다. */
@@ -78,9 +78,9 @@ public final class InternalApiConfig {
     }
 
     /** KMS가 오류 시 입력을 반환해도 그 값을 내부 인증키로 사용하지 않는다. */
-    public static String key(SharedMap<String, Object> row, String column) {
+    public static String key(SharedMap<String, Object> rowMap, String column) {
 
-        String value = row.getString(column);
+        String value = rowMap.getString(column);
         if (value.isBlank()) return "";
         byte[] encrypted = Base64.getDecoder().decode(value);
         byte[] plain = KMSUtils.decrypt(encrypted);

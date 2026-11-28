@@ -25,11 +25,12 @@ public final class AuthorizeSvc {
     private final WalletValidator validator;
     private final WalletLedgerRps ledger;
 
+    /** 고객사 API의 키 형식 검증과 Wallet 조회를 연결한다. */
     @Autowired
     public AuthorizeSvc(WalletValidator validator, WalletLedgerRps ledger) {
 
         this.validator = validator;
-        this.ledger = ledger;
+        this.ledger    = ledger;
     }
 
     /**
@@ -43,21 +44,26 @@ public final class AuthorizeSvc {
         validator.walletKey(etx);
         etx.setKeyHash(CommonUtils.hashSHA256(etx.getAuthorization()));
 
-        SharedMap<String, Object> reply;
+        // 원장은 키 해시로 Wallet을 찾고 TX24_HTTP가 전달한 remoteIp를 해당 Wallet의 등록 IP와 대조한다.
+        SharedMap<String, Object> replyMap;
         try {
-            reply = ledger.authorize(etx.getKeyHash(), etx.getClientIp(), etx.getTrace());
+            replyMap = ledger.authorize(etx.getKeyHash(), etx.getClientIp(), etx.getTrace());
         } catch (Exception failure) {
             throw WalletLedgerRps.unreachable(failure);
         }
-        if (!reply.getBoolean("result")) {
-            SharedMap<String, Object> refused = WalletResult.ledger(etx.getAction(), reply, etx.getTrace());
-            throw new WalletException(refused.getString("resultCd"), refused.getString("advanceMsg"));
+
+        if (!replyMap.getBoolean("result")) {
+            SharedMap<String, Object> refusedMap = WalletResult.ledger(etx.getAction(), replyMap, etx.getTrace());
+            throw new WalletException(refusedMap.getString("resultCd"), refusedMap.getString("advanceMsg"));
         }
-        SharedMap<String, Object> data = reply.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
-        if (data == null || data.isBlank("walletId")) {
+
+        SharedMap<String, Object> dataMap = replyMap.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
+        if (dataMap == null || dataMap.isBlank("walletId")) {
             throw new WalletException("W999", "인증된 Wallet 응답을 확인해 주세요.");
         }
-        etx.setWalletId(data.getString("walletId"));
+
+        // 이후 송금 서명과 거래 조회에는 인증 결과의 Wallet ID를 사용한다.
+        etx.setWalletId(dataMap.getString("walletId"));
         logger.debug("Wallet 인증 완료: action={}, walletId={}, trace={}",
                 etx.getAction(), etx.getWalletId(), etx.getTrace());
     }

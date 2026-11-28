@@ -54,18 +54,19 @@ public final class TransferApi {
     private INet recover(boolean balance) {
 
         try {
-            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
-            String trace = request.data().getString("x-trace-id");
-            SharedMap<String, Object> data = balance ? recoverySvc.recoverBalance(trace)
-                    : recoverySvc.recover(input.getInt("limit"), trace);
+            SharedMap<String, Object> inputMap = INetUtils.receiveInternal(channel, request, 8192);
+            String                    trace    = request.data().getString("x-trace-id");
+            SharedMap<String, Object> dataMap  = balance ? recoverySvc.recoverBalance(trace)
+                    : recoverySvc.recover(inputMap.getInt("limit"), trace);
+
             return INetUtils.response(request, SharedMap.<String, Object>of()
                     .add("result", true)
-                    .add("data", data));
+                    .add("data", dataMap));
         } catch (SecurityException refused) {
             return INetUtils.response(request,
                     INetUtils.error("TX401", "재조회 요청 경로와 키를 확인하세요."));
         } catch (Exception failure) {
-            logger.warn("송금 재조회 처리 실패: type={}", failure.getClass().getSimpleName());
+            logger.info("송금 재조회 처리 실패: type={}", failure.getClass().getSimpleName());
             return INetUtils.response(request,
                     INetUtils.error("TX503", "송금 재조회를 처리하지 못했습니다."));
         }

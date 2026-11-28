@@ -1,4 +1,4 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.rps;
 
 import java.sql.Statement;
 import java.sql.Connection;

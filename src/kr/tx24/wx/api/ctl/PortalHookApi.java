@@ -8,7 +8,7 @@ import kr.tx24.lib.inter.INet;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletConfig;
 import kr.tx24.wx.api.utils.INetUtils;
-import kr.tx24.wx.ledger.WxWebhookRps;
+import kr.tx24.wx.ledger.rps.WxWebhookRps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,15 +34,19 @@ public final class PortalHookApi {
 
         String key = WalletConfig.portalRetryKey();
         if (key.length() < 32) return INetUtils.response(request, INetUtils.error("TX503", "포털 연동 설정을 확인하세요."));
+
         try {
-            SharedMap<String, Object> input = INetUtils.receive(channel, request, WalletConfig.portalPeers(), "x-wx-key", key, 8192);
-            boolean changed = WxWebhookRps.retryMerchant(input.getString("merchant"), input.getString("actor"),
-                    input.getString("hookId"), input.getInt("generation", -1));
-            return INetUtils.response(request, SharedMap.<String, Object>of().add("changed", changed));
+            SharedMap<String, Object> inputMap = INetUtils.receive(channel, request, WalletConfig.portalPeers(), "x-wx-key", key, 8192);
+
+            boolean                   changed  = WxWebhookRps.retryMerchant(inputMap.getString("merchant"), inputMap.getString("actor"),
+                    inputMap.getString("hookId"), inputMap.getInt("generation", -1));
+
+            return INetUtils.response(request, SharedMap.<String, Object>of()
+                    .add("changed", changed));
         } catch (SecurityException refused) {
             return INetUtils.response(request, INetUtils.error("TX401", "포털 요청 경로와 키를 확인하세요."));
         } catch (Exception failure) {
-            logger.warn("고객사 웹훅 재전송 처리 실패: type={}", failure.getClass().getSimpleName());
+            logger.info("고객사 웹훅 재전송 처리 실패: type={}", failure.getClass().getSimpleName());
             return INetUtils.response(request, INetUtils.error("TX503", "재전송 접수 결과를 확인해 주세요."));
         }
     }

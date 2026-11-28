@@ -2,7 +2,6 @@ package kr.tx24.wx.api.vld;
 
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletException;
-import kr.tx24.wx.api.WalletPolicy;
 
 /**
  * 본사 Wallet 이전 요청의 필수값과 모양을 검증한다.
@@ -23,35 +22,30 @@ public final class HqWalletValidator {
      *
      * <p>허용한 필드만 담는다. 요청에 없는 값을 원장으로 흘려보내지 않는다.</p>
      */
-    public SharedMap<String, Object> required(SharedMap<String, Object> in) {
+    public SharedMap<String, Object> required(SharedMap<String, Object> inMap) {
 
-        SharedMap<String, Object> input = SharedMap.<String, Object>of()
-                .add("trackId", text(in, "trackId", TRACK_MAX))
-                .add("mchtId", text(in, "mchtId", 24))
-                .add("walletId", text(in, "walletId", 32))
-                .add("userId", text(in, "userId", 24))
-                .add("note", text(in, "note", 128));
+        SharedMap<String, Object> inputMap = SharedMap.<String, Object>of()
+                .add("trackId", text(inMap, "trackId", TRACK_MAX))
+                .add("mchtId", text(inMap, "mchtId", 24))
+                .add("walletId", text(inMap, "walletId", 32))
+                .add("userId", text(inMap, "userId", 24))
+                .add("note", text(inMap, "note", 128));
 
-        long amount = in.getLong("amount");
+        long amount = inMap.getLong("amount");
         if (amount < 1 || amount > AMOUNT_MAX) {
             throw new WalletException("W001", "금액은 1원 이상 9,999,999,999,999원 이하 정수로 입력해 주세요.");
         }
-        return input.add("amount", amount);
+
+        return inputMap.add("amount", amount);
     }
 
     /** 필수 문자열: 공백·길이·제어문자를 확인하고 원문을 유지한다. */
-    private static String text(SharedMap<String, Object> in, String field, int max) {
+    private static String text(SharedMap<String, Object> inMap, String field, int max) {
 
-        String value = in.getString(field).strip();
+        String value = inMap.getString(field).strip();
         if (value.isEmpty() || value.length() > max || value.chars().anyMatch(Character::isISOControl)) {
             throw new WalletException("W001", field + " 값을 확인해 주세요.");
         }
         return value;
-    }
-
-    /** 요청 본문 상한을 확인한다. 내부 구간 프레임과 같은 값을 쓴다. */
-    public void frame(int length) {
-
-        if (length > WalletPolicy.FRAME) throw new WalletException("W001", "요청 본문 크기를 확인해 주세요.");
     }
 }

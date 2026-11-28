@@ -14,23 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
 
-/**
- * Wallet 네 업무의 공통 절차를 한곳에서 순서대로 수행한다.
- *
- * <p>진입 경로는 게이트웨이 INet({@code MerchantApi}) 하나다. 흐름을 컨트롤러에 두지 않고
- * 여기 한 번만 두어 시험 도구도 같은 절차를 지나게 한다.</p>
- *
- * <p>절차와 그 이유</p>
- * <ol>
- *   <li>접근 구역 — 국가 차단과 차단 목록. 막히면 원장도 이력도 건드리지 않는다</li>
- *   <li>인증 — 키 형식과 키에 연결된 Wallet, 접속 IP</li>
- *   <li>접수 이력 — 본문을 읽어 해시와 함께 남긴다. 실패하면 <b>업무를 시작하지 않는다</b></li>
- *   <li>형식 검증 — Content-Type과 JSON 필드</li>
- *   <li>업무 — 잔액·거래조회는 {@link WalletSvc}, 송금은 {@link TransferSvc},
- *       예금주 조회는 {@link HolderSvc}</li>
- *   <li>완료 이력 — 실패해도 <b>이미 확정된 업무 결과를 바꾸지 않는다</b></li>
- * </ol>
- */
+/** 고객사 Wallet API의 접근 확인, 요청 이력, 업무 실행과 응답을 처리한다. */
 public final class WalletFlowSvc {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletFlowSvc.class);
@@ -43,18 +27,19 @@ public final class WalletFlowSvc {
     private final TransferSvc transferSvc;
     private final HolderSvc holderSvc;
 
+    /** 고객사 Wallet 네 경로의 검증, 이력 기록과 업무 서비스를 연결한다. */
     @Autowired
     public WalletFlowSvc(WalletValidator validator, TransferValidator transferValidator, AuthorizeSvc authorizeSvc,
                           WalletContextLoader loader, WalletSvc walletSvc, TransferSvc transferSvc,
                           HolderSvc holderSvc) {
 
-        this.validator = validator;
+        this.validator         = validator;
         this.transferValidator = transferValidator;
-        this.authorizeSvc = authorizeSvc;
-        this.loader = loader;
-        this.walletSvc = walletSvc;
-        this.transferSvc = transferSvc;
-        this.holderSvc = holderSvc;
+        this.authorizeSvc      = authorizeSvc;
+        this.loader            = loader;
+        this.walletSvc         = walletSvc;
+        this.transferSvc       = transferSvc;
+        this.holderSvc         = holderSvc;
     }
 
     /**
@@ -85,61 +70,62 @@ public final class WalletFlowSvc {
             loader.open(etx, body);
         } catch (WalletException refused) {
             // 업무를 시작하지 않은 거절이다. 어느 단계에서 막혔는지 남겨야 추적이 된다.
-            logger.warn("전처리 거절: action={}, clientIp={}, resultCd={}, reason={}, trace={}",
+            logger.info("전처리 거절: action={}, clientIp={}, resultCd={}, reason={}, trace={}",
                     action, clientIp, refused.getResultCd(), refused.getAdvanceMsg(), trace);
             return respond(etx, WalletResult.of(refused, trace));
         } catch (Exception failure) {
-            logger.error("전처리 실패: action={}, clientIp={}, trace={}", action, clientIp, trace, failure);
+            logger.debug("전처리 실패: action={}, clientIp={}, trace={}", action, clientIp, trace);
             return respond(etx, WalletResult.of(failure, trace));
         } finally {
             logger.info("Wallet API 접속: action={}, walletId={}, remoteIp={}, trace={}",
                     action, etx.isAuthorized() ? etx.getWalletId() : "미확인",
                     clientIp == null || clientIp.isBlank() ? "미확인" : clientIp, trace);
         }
-        logger.info("전처리 완료: action={}, walletId={}, ioId={}, trace={}",
+
+        logger.debug("전처리 완료: action={}, walletId={}, ioId={}, trace={}",
                 action, etx.getWalletId(), etx.getIo().getString("ioId"), trace);
 
         // 업무 실패도 결과이므로 완료 이력을 남긴다.
-        SharedMap<String, Object> reply;
+        SharedMap<String, Object> replyMap;
         try {
             validator.required(etx);
-            reply = execute(etx);
+
+            // 송금은 인증된 Wallet과 지급 전문으로 서명을 확인한 뒤에만 선차감할 수 있다.
+            switch (action) {
+                case "payout" -> {
+                    transferValidator.isTransferable(etx);
+                    replyMap = transferSvc.transfer(etx);
+                }
+                case "holder" -> replyMap = holderSvc.holder(etx);
+                default       -> replyMap = walletSvc.query(etx);
+            }
         } catch (WalletException refused) {
-            logger.warn("업무 거절: action={}, walletId={}, resultCd={}, reason={}, trace={}",
+            logger.info("업무 거절: action={}, walletId={}, resultCd={}, reason={}, trace={}",
                     action, etx.getWalletId(), refused.getResultCd(), refused.getAdvanceMsg(), trace);
-            reply = WalletResult.of(refused, trace);
+            replyMap = WalletResult.of(refused, trace);
         } catch (Exception failure) {
-            logger.error("업무 실패: action={}, walletId={}, trace={}", action, etx.getWalletId(), trace, failure);
-            reply = WalletResult.of(failure, trace);
+            logger.debug("업무 실패: action={}, walletId={}, trace={}", action, etx.getWalletId(), trace);
+            replyMap = WalletResult.of(failure, trace);
         }
-        loader.close(etx, reply);
+
+        // 접수 이력이 있는 요청은 업무 거절도 완료 결과로 기록한다.
+        loader.close(etx, replyMap);
+
         logger.info("응답: action={}, walletId={}, resultCd={}, trace={}",
-                action, etx.getWalletId(), reply.getString("resultCd"), trace);
-        return respond(etx, reply);
-    }
-
-    /** 업무 분기. 송금만 자금이 움직이므로 전용 검증을 먼저 통과해야 한다. */
-    private SharedMap<String, Object> execute(WalletContext etx) {
-
-        if (etx.getAction().equals("payout")) {
-            transferValidator.isTransferable(etx);
-            return transferSvc.transfer(etx);
-        }
-        if (etx.getAction().equals("holder")) return holderSvc.holder(etx);
-        return walletSvc.query(etx);
+                action, etx.getWalletId(), replyMap.getString("resultCd"), trace);
+        return respond(etx, replyMap);
     }
 
     /**
      * 인증이 끝난 뒤의 응답에는 확정된 Wallet을 함께 돌려준다.
      *
-     * <p>인증 실패({@code W002})와 Wallet 설정 오류({@code W004})에는 넣지 않는다.
-     * 그 두 경우에는 돌려줄 Wallet이 확정되지 않았다.</p>
+     * <p>인증 실패({@code W002})와 설정·거래 거절({@code W004}) 응답에서는 Wallet ID를 생략한다.</p>
      */
-    private static SharedMap<String, Object> respond(WalletContext etx, SharedMap<String, Object> reply) {
+    private static SharedMap<String, Object> respond(WalletContext etx, SharedMap<String, Object> replyMap) {
 
-        if (etx.isAuthorized() && !reply.isEquals("resultCd", "W002") && !reply.isEquals("resultCd", "W004")) {
-            reply.put("walletId", etx.getWalletId());
+        if (etx.isAuthorized() && !replyMap.isEquals("resultCd", "W002") && !replyMap.isEquals("resultCd", "W004")) {
+            replyMap.put("walletId", etx.getWalletId());
         }
-        return reply;
+        return replyMap;
     }
 }

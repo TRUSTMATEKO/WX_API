@@ -31,7 +31,7 @@ public final class WalletValidator {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     /**
-     * 접근 구역을 확인한다. 국가 차단과 차단 목록을 인증보다 먼저 적용한다.
+     * 고객사 요청의 접속 IP를 인증 전에 차단 목록과 대조한다.
      *
      * <p>여기서 막힌 요청은 원장 호출도, API 요청 이력도 남기지 않는다. 차단 사유는
      * 응답에 드러나지 않고 인증·접속 IP 실패와 같은 코드로만 나간다.</p>
@@ -58,11 +58,11 @@ public final class WalletValidator {
             throw new WalletException("W001", "application/json으로 요청해 주세요.");
         }
         try {
-            SharedMap<String, Object> input = payload(etx.getAction(), etx.getBody());
-            if (!input.isBlank("trackId") && etx.getIo() != null) {
-                etx.getIo().put("trackId", input.getString("trackId"));
+            SharedMap<String, Object> inputMap = payload(etx.getAction(), etx.getBody());
+            if (!inputMap.isBlank("trackId") && etx.getIo() != null) {
+                etx.getIo().put("trackId", inputMap.getString("trackId"));
             }
-            etx.setInput(input);
+            etx.setInput(inputMap);
         } catch (IOException | IllegalArgumentException invalid) {
             throw new WalletException("W001", "요청 JSON의 필드와 형식을 확인해 주세요.", invalid);
         }
@@ -87,33 +87,38 @@ public final class WalletValidator {
         if (!bankCd.matches("[0-9]{3}") || !accntNo.matches("[0-9]+")) {
             throw new IllegalArgumentException();
         }
+
         // 수취 계좌는 송금과 예금주 조회 모두가 쓴다. 전에는 송금 분기에서만 담아 예금주 조회가
         // 은행코드와 계좌번호 없이 원장에 닿아 항상 W001 로 거절됐다.
-        SharedMap<String, Object> input = SharedMap.<String, Object>of()
+        SharedMap<String, Object> inputMap = SharedMap.<String, Object>of()
                 .add("trackId", track)
                 .add("bankCd", bankCd)
                 .add("accntNo", accntNo);
+
         if (action.equals("payout")) {
             Iterator<String> fields = payload.fieldNames();
             while (fields.hasNext()) {
                 if (!WalletPolicy.TRANSFER_FIELDS.contains(fields.next())) throw new IllegalArgumentException();
             }
+
             JsonNode amount = payload.path("amount");
             if (!amount.isIntegralNumber() || !amount.canConvertToLong()
                     || amount.longValue() < 1 || amount.longValue() > WalletPolicy.AMOUNT_MAX) {
                 throw new IllegalArgumentException();
             }
+
             String checksum = requiredText(payload, "checksum", 64);
             if (!checksum.matches("[0-9a-f]{64}")) throw new IllegalArgumentException();
 
-            return input
+            return inputMap
                     .add("amount", amount.longValue())
                     .add("sender", signingText(payload, "sender", 20))
                     .add("holder", signingText(payload, "holder", 64))
                     .add("note", signingText(payload, "note", 128))
                     .add("checksum", checksum);
         }
-        return input;
+
+        return inputMap;
     }
 
     /**
@@ -126,7 +131,8 @@ public final class WalletValidator {
 
         String trxId = payload.hasNonNull("trxId") ? requiredText(payload, "trxId", 32) : "";
         if (!trxId.isEmpty()) {
-            return SharedMap.<String, Object>of().add("trxId", trxId);
+            return SharedMap.<String, Object>of()
+                    .add("trxId", trxId);
         }
 
         String track = requiredText(payload, "trackId", 64);
@@ -139,7 +145,10 @@ public final class WalletValidator {
         } catch (DateTimeParseException invalid) {
             throw new IllegalArgumentException();
         }
-        return SharedMap.<String, Object>of().add("trackId", track).add("trxDay", day);
+
+        return SharedMap.<String, Object>of()
+                .add("trackId", track)
+                .add("trxDay", day);
     }
 
     /**

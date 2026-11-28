@@ -1,13 +1,16 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.utils;
 
 import java.sql.ResultSet;
 import java.sql.PreparedStatement;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.db.DBUtils;
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.lang.IDUtils;
+import kr.tx24.wx.ledger.enm.LedgerCode;
+import kr.tx24.wx.ledger.ex.LedgerEx;
 
 /** 본사 Wallet의 확정 입출금을 호출 업무와 같은 트랜잭션에 분개한다. */
 public final class HqWalletUtils {
@@ -26,8 +29,11 @@ public final class HqWalletUtils {
         long before;
         long available;
         long previous;
-        String lock = "SELECT w.id,b.balance,b.available,b.lastWalletIdx FROM WX.WALLET w "
-                + "JOIN WX.WALLET_BALANCE b ON b.walletId=w.id WHERE w.hqWalletHqId=? FOR UPDATE";
+        String lock = new Retrieve("WX.WALLET w")
+                .columns("w.id,b.balance,b.available,b.lastWalletIdx")
+                .joinInner("WX.WALLET_BALANCE b", "b.walletId=w.id")
+                .where("w.hqWalletHqId=?")
+                .forUpdate().build();
         try (PreparedStatement query = db.prepareStatement(lock)) {
             query.setString(1, hqId);
             try (ResultSet row = query.executeQuery()) {
@@ -64,7 +70,7 @@ public final class HqWalletUtils {
             case "WALLET_MOVE" -> "관리자";
             default -> "일반";
         } + (delta > 0 ? "입금" : "출금");
-        int day = Integer.parseInt(postedAt.toLocalDate().format(DateTimeFormatter.BASIC_ISO_DATE));
+        int day = Integer.parseInt(DateUtils.toString(postedAt.toLocalDate()));
         String insert = "INSERT INTO WX.TRX_WALLET(id,ownerType,walletId,hqId,refType,refId,refSeq,`sequence`,trxType,dtlType,"
                 + "amount,depositAmt,withdrawnAmt,balance,balanceAfter,trxDay,trxDate,regId,regDay) "
                 + "VALUES(?,'HQ',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";

@@ -9,21 +9,14 @@ import kr.tx24.wx.api.rps.WalletLedgerRps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * 송금 통신장애의 원거래 결과를 확인해 확정한다.
- *
- * <p>기관 연동은 WX_API에, 원장은 WX_ADM에, 주기 실행은 WX_TASK에 있다. 그래서 WX_TASK가
- * 1분마다 이 경로를 부르고 실제 조회와 확정은 여기서 한다.</p>
- *
- * <p>계약은 OPL_TASK의 {@code PayoutNetErrTask}와 같다. 기관이 결과를 확정해 주지 않으면
- * 다시 큐에 넣어 다음 주기에 확인하고, 실패로 확인되면 원장이 잔액을 원복한다.</p>
- */
+/** WX_TASK 요청으로 미확인 송금과 본사 출금의 원거래 결과를 조회해 확정한다. */
 public final class RecoverySvc {
 
     private static final Logger logger = LoggerFactory.getLogger(RecoverySvc.class);
 
     private final WalletLedgerRps ledger;
 
+    /** 작업기 재조회에 사용할 송금 원장을 연결한다. */
     @Autowired
     public RecoverySvc(WalletLedgerRps ledger) {
 
@@ -33,82 +26,101 @@ public final class RecoverySvc {
     /** 원장에서 선점한 미결 송금을 한 건씩 확인한다. */
     public SharedMap<String, Object> recover(int limit, String trace) throws Exception {
 
-        if (!WalletConfig.upstreamReady()) {
-            logger.warn("기관 전송 환경이 없어 송금 재조회를 수행하지 않는다: trace={}", trace);
-            return counts(0, 0, 0);
-        }
+        int                             batchSize = Math.min(Math.max(limit, 1), WalletPolicy.RECOVERY_LIMIT);
+        List<SharedMap<String, Object>> rowsList  = ledger.pending(batchSize, trace);
 
-        List<SharedMap<String, Object>> rows = ledger.pending(Math.min(Math.max(limit, 1), WalletPolicy.RECOVERY_LIMIT), trace);
-        SharedMap<String,Object> hq = counts(0,0,0);
+        // 본사 출금 재조회가 실패해도 이미 선점한 고객사 송금은 계속 처리한다.
+        SharedMap<String, Object> hqMap;
         try {
-            hq = new HqWithdrawSvc(ledger).recover(Math.min(Math.max(limit,1),WalletPolicy.RECOVERY_LIMIT));
+            hqMap = new HqWithdrawSvc(ledger).recover(batchSize);
         } catch (RuntimeException failure) {
-            logger.error("본사 출금 재조회 목록 조회 실패: trace={}",trace,failure);
-        }
-        if (rows.isEmpty()) {
-            return hq;
+            logger.info("본사 출금 재조회 목록 조회 실패: type={}, trace={}", failure.getClass().getSimpleName(), trace);
+            logger.debug("본사 출금 재조회 목록 예외 상세: trace={}", trace, failure);
+            hqMap = counts(0, 0, 0);
         }
 
-        int settled = 0;
+        if (rowsList.isEmpty()) {
+            return hqMap;
+        }
+
+        int settled  = 0;
         int requeued = 0;
-        for (SharedMap<String, Object> row : rows) {
-            String trxId = row.getString("trxId");
+        for (SharedMap<String, Object> rowMap : rowsList) {
+            String trxId = rowMap.getString("trxId");
             try {
-                if (resolve(row, trace)) settled++;
-                else requeued++;
+                if (resolve(rowMap, trace)) {
+                    settled++;
+                } else {
+                    requeued++;
+                }
             } catch (Exception failure) {
-                logger.error("송금 재조회 처리 실패, 선점 만료 후 재시도: trxId={}, trace={}", trxId, trace, failure);
+                logger.info("송금 재조회 처리 실패, 선점 만료 후 재시도: trxId={}, trace={}", trxId, trace);
+                logger.debug("송금 재조회 처리 예외 상세: trxId={}, trace={}", trxId, trace, failure);
                 requeued++;
             }
         }
+
         logger.info("송금 재조회 결과: checked={}, settled={}, requeued={}, trace={}",
-                rows.size(), settled, requeued, trace);
-        return counts(rows.size()+hq.getInt("checked"), settled+hq.getInt("settled"), requeued+hq.getInt("requeued"));
+                rowsList.size(), settled, requeued, trace);
+        return counts(rowsList.size() + hqMap.getInt("checked"), settled + hqMap.getInt("settled"), requeued + hqMap.getInt("requeued"));
     }
 
     /** 작업기 주기에 입금 이후 보류된 모계좌 한 건을 새로운 기관 잔액으로 대조한다. */
     public SharedMap<String, Object> recoverBalance(String trace) throws Exception {
 
-        if (!"prod".equals(WalletConfig.upstreamEnv())) return counts(0, 0, 0);
-        SharedMap<String, Object> job = ledger.claimBalanceReview();
-        if (job == null) return counts(0, 0, 0);
-        boolean completed = DepositSvc.syncBankBalance(ledger, job, trace);
+        if (!"prod".equals(WalletConfig.upstreamEnv())) {
+            return counts(0, 0, 0);
+        }
+
+        SharedMap<String, Object> jobMap = ledger.claimBalanceReview();
+        if (jobMap == null) {
+            return counts(0, 0, 0);
+        }
+
+        boolean completed = DepositSvc.syncBankBalance(ledger, jobMap, trace);
         return counts(1, completed ? 1 : 0, completed ? 0 : 1);
     }
 
-    /** 한 건의 기관 원거래 결과를 조회해 확정한다. 확정하지 못하면 재조회 대기로 돌린다. */
-    private boolean resolve(SharedMap<String, Object> row, String trace) throws Exception {
+    /** 미전송 접수를 원복하거나 기관 원거래 결과를 조회해 확정한다. */
+    private boolean resolve(SharedMap<String, Object> rowMap, String trace) throws Exception {
 
-        String trxId    = row.getString("trxId");
-        String acqTrxId = row.getString("bankTrxId");
-        SharedMap<String, Object> inquiry;
+        String trxId = rowMap.getString("trxId");
+        if (rowMap.isEquals("status", "접수")) {
+            return ledger.expireUnsent(trxId);
+        }
+
+        String acqTrxId = rowMap.getString("bankTrxId");
+        SharedMap<String, Object> inquiryMap;
         try {
-            inquiry = new HyphenSvc(TransferSvc.upstream(row)).transferResult(acqTrxId);
+            inquiryMap = new HyphenSvc(TransferSvc.upstream(rowMap)).transferResult(acqTrxId);
         } catch (Exception failure) {
-            logger.warn("기관 원거래 조회 호출 실패: trxId={}, acqTrxId={}, trace={}",
+            logger.debug("기관 원거래 조회 호출 실패: trxId={}, acqTrxId={}, trace={}",
                     trxId, acqTrxId, trace, failure);
             return false;
         }
 
-        if (unresolved(inquiry)) {
+        if (isUnresolved(inquiryMap)) {
             logger.info("기관 원거래 결과 미확정: trxId={}, resultCd={}, acqResultCd={}, trace={}",
-                    trxId, inquiry.getString("resultCd"), inquiry.getString("acqResultCd"), trace);
+                    trxId, inquiryMap.getString("resultCd"), inquiryMap.getString("acqResultCd"), trace);
             return false;
         }
 
-        String outcome = WalletPolicy.SUCCEEDED.equals(inquiry.getString("resultCd"))
+        String outcome = WalletPolicy.SUCCEEDED.equals(inquiryMap.getString("resultCd"))
                 ? WalletPolicy.OUTCOME_SUCCESS : WalletPolicy.OUTCOME_FAILED;
-        SharedMap<String, Object> settled = ledger.confirm(SharedMap.<String, Object>of()
+        // 조회 전문 자체의 성공 여부를 확인한 뒤 원거래 결과 코드로 원장을 확정한다.
+        SharedMap<String, Object> commandMap = SharedMap.<String, Object>of()
                 .add("trxId", trxId)
                 .add("outcome", outcome)
-                .add("responseCode", inquiry.getString("resultCd"))
-                .add("responseMsg", inquiry.getString("resultMsg"))
-                .add("acqTrxId", acqTrxId), trace);
-        if (!settled.getBoolean("result")) {
-            throw new IllegalStateException("송금 재조회 확정이 거절되었습니다. code=" + settled.getString("code"));
+                .add("responseCode", inquiryMap.getString("resultCd"))
+                .add("responseMsg", inquiryMap.getString("resultMsg"))
+                .add("acqTrxId", acqTrxId);
+        SharedMap<String, Object> settledMap = ledger.confirm(commandMap, trace);
+        if (!settledMap.getBoolean("result")) {
+            throw new IllegalStateException("송금 재조회 확정이 거절되었습니다. code=" + settledMap.getString("code"));
         }
+
         logger.info("송금 통신장애 확정: trxId={}, outcome={}, resultCd={}, acqTrxId={}, trace={}",
-                trxId, outcome, inquiry.getString("resultCd"), acqTrxId, trace);
+                trxId, outcome, inquiryMap.getString("resultCd"), acqTrxId, trace);
         return true;
     }
 
@@ -118,10 +130,10 @@ public final class RecoverySvc {
      * <p>기관 조회가 성공했고 원거래 결과 코드가 있는 응답만 확정에 사용한다.
      * 미확정 응답은 다음 주기에 다시 확인한다.</p>
      */
-    private static boolean unresolved(SharedMap<String, Object> inquiry) {
+    private static boolean isUnresolved(SharedMap<String, Object> inquiryMap) {
 
-        String resultCd    = inquiry.getString("resultCd");
-        String acqResultCd = inquiry.getString("acqResultCd");
+        String resultCd    = inquiryMap.getString("resultCd");
+        String acqResultCd = inquiryMap.getString("acqResultCd");
         return resultCd.isBlank() || resultCd.startsWith("X") || !WalletPolicy.SUCCEEDED.equals(acqResultCd);
     }
 

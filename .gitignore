@@ -8,5 +8,9 @@
 *.pem
 *.key
 .env*
-/ai/
+/ai/*
+!/ai/tools/
+/ai/tools/*
+!/ai/tools/VerifyWalletStartup.java
+!/ai/tools/verify-isolated.ps1
 /conf/

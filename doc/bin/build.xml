@@ -33,10 +33,7 @@
     <!-- =========================================================
          실행 클래스
 
-         실제 Java 소스의 package 선언과 일치해야 합니다.
-
-         예:
-         package kr.tx24.task.main;
+         TX24_LIB의 공통 INet 서버를 진입점으로 사용한다.
          ========================================================= -->
 
     <property name="main.class" value="kr.tx24.inet.server.INetServer"/>

@@ -77,15 +77,17 @@ public final class HqWalletApi {
 
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
-            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
+            SharedMap<String, Object> inputMap = INetUtils.receiveInternal(channel, request, 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
-            String clientIp = NettyUtils.getRemoteAddress(channel);
-            SharedMap<String, Object> data = "collect".equals(direction)
-                    ? hqWalletSvc.collect(input, clientIp, trace)
-                    : hqWalletSvc.payout(input, clientIp, trace);
-            return INetUtils.response(request, data);
+            String                    clientIp = NettyUtils.getRemoteAddress(channel);
+
+            SharedMap<String, Object> dataMap  = "collect".equals(direction)
+                    ? hqWalletSvc.collect(inputMap, clientIp, trace)
+                    : hqWalletSvc.payout(inputMap, clientIp, trace);
+
+            return INetUtils.response(request, dataMap);
         } catch (SecurityException refused) {
-            logger.warn("Wallet 이전 요청의 경로 또는 키를 거절했다: direction={}, trace={}", direction, trace);
+            logger.info("Wallet 이전 요청의 경로 또는 키를 거절했다: direction={}, trace={}", direction, trace);
             return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
         } catch (WalletException refused) {
             return INetUtils.response(request, WalletResult.of(refused, trace));

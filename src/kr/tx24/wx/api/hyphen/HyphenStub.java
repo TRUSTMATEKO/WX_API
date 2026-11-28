@@ -1,12 +1,12 @@
 package kr.tx24.wx.api.hyphen;
 
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.time.ZonedDateTime;
 import java.util.function.Consumer;
 
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.redis.RedisUtils;
+import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.utils.ExtCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,9 +70,6 @@ public final class HyphenStub {
     /** 시험 예금주 조회가 돌려주는 이름. 실제 사람 이름을 쓰지 않는다. */
     private static final String TEST_HOLDER = "시험예금주";
 
-    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HHmmss");
 
     private HyphenStub() {
 
@@ -92,15 +89,15 @@ public final class HyphenStub {
     public static SharedMap<String, Object> transfer(String hqId, long amount,
             Consumer<String> recordBeforeSend) {
 
-        LocalDateTime now = LocalDateTime.now(SEOUL);
-        SharedMap<String, Object> reply = head(hqId, now);
-        recordBeforeSend.accept(reply.getString("acqTrxId"));
+        ZonedDateTime             now      = DateUtils.getZonedDate(WalletPolicy.SEOUL);
+        SharedMap<String, Object> replyMap = head(hqId, now);
+        recordBeforeSend.accept(replyMap.getString("acqTrxId"));
 
         if (RedisUtils.get(NO_RESPONSE_KEY) != null) {
             // 실제 통신장애와 같이 잔액은 줄이지 않는다. 기관이 처리했는지 알 수 없기 때문이다.
-            logger.warn("[시험] 통신장애 스위치가 켜져 있어 무응답을 돌린다: hqId={}, amount={}, acqTrxId={}",
-                    hqId, amount, reply.getString("acqTrxId"));
-            return reply
+            logger.info("[시험] 통신장애 스위치가 켜져 있어 무응답을 돌린다: hqId={}, amount={}, acqTrxId={}",
+                    hqId, amount, replyMap.getString("acqTrxId"));
+            return replyMap
                     .add("acqResultCd", NO_RESPONSE)
                     .add("acqResultMsg", "통신장애, 결과 확인 중")
                     .add("balance", 0L)
@@ -115,9 +112,9 @@ public final class HyphenStub {
         if (remain < 0) {
             // 줄인 만큼 되돌린다. 시험이라도 잔액이 음수로 남으면 다음 시험이 어그러진다.
             RedisUtils.incrBy(key, amount);
-            logger.warn("[시험] 모계좌 잔액 부족으로 송금을 실패로 응답한다: hqId={}, amount={}, 잔액={}",
+            logger.info("[시험] 모계좌 잔액 부족으로 송금을 실패로 응답한다: hqId={}, amount={}, 잔액={}",
                     hqId, amount, remain + amount);
-            return reply
+            return replyMap
                     .add("acqResultCd", NOT_ENOUGH)
                     .add("acqResultMsg", ExtCode.getPISP(NOT_ENOUGH))
                     .add("balance", remain + amount)
@@ -125,8 +122,8 @@ public final class HyphenStub {
         }
 
         logger.info("[시험] 더미 송금 성공: hqId={}, amount={}, 남은 잔액={}, acqTrxId={}",
-                hqId, amount, remain, reply.getString("acqTrxId"));
-        return reply
+                hqId, amount, remain, replyMap.getString("acqTrxId"));
+        return replyMap
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상이체")
                 .add("balance", remain)
@@ -137,7 +134,7 @@ public final class HyphenStub {
     public static SharedMap<String, Object> holder(String hqId, String bankCd, String accntNo) {
 
         logger.info("[시험] 더미 예금주 조회: bankCd={}, 계좌 자릿수={}", bankCd, accntNo.length());
-        return head(hqId, LocalDateTime.now(SEOUL))
+        return head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL))
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상조회")
                 .add("holder", TEST_HOLDER);
@@ -152,10 +149,10 @@ public final class HyphenStub {
     public static SharedMap<String, Object> transferResult(String hqId, String acqTrxId) {
 
         logger.info("[시험] 더미 송금 결과 조회: acqTrxId={}", acqTrxId);
-        SharedMap<String, Object> reply = head(hqId, LocalDateTime.now(SEOUL));
+        SharedMap<String, Object> replyMap = head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL));
         // 조회는 원거래에 대해 답하는 것이다. 조회 전문 자신의 일련번호가 아니라 받은 원거래번호를 돌려주다.
-        reply.put("acqTrxId", acqTrxId);
-        return reply
+        replyMap.put("acqTrxId", acqTrxId);
+        return replyMap
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상조회")
                 .add("resultCd", SUCCEEDED)
@@ -171,8 +168,8 @@ public final class HyphenStub {
 
         Object stored = RedisUtils.get(key);
         long amount = stored == null ? 0L : Long.parseLong(String.valueOf(stored).trim());
-        logger.info("[시험] 더미 모계좌 잔액 조회: hqId={}, 잔액={}", hqId, amount);
-        return head(hqId, LocalDateTime.now(SEOUL))
+        logger.debug("[시험] 더미 모계좌 잔액 조회: hqId={}, 잔액={}", hqId, amount);
+        return head(hqId, DateUtils.getZonedDate(WalletPolicy.SEOUL))
                 .add("acqResultCd", SUCCEEDED)
                 .add("acqResultMsg", "정상조회")
                 .add("balance", amount);
@@ -184,10 +181,10 @@ public final class HyphenStub {
      * <p>{@code acqTrxId}는 실제 전문과 같이 거래일 여섯 자리와 일련번호 여섯 자리를 이어 붙인
      * 열두 자리다. 재조회가 이 형식을 요구하므로 시험에서도 같게 만든다.</p>
      */
-    private static SharedMap<String, Object> head(String hqId, LocalDateTime now) {
+    private static SharedMap<String, Object> head(String hqId, ZonedDateTime now) {
 
-        String day = now.format(DAY);
-        String time = now.format(TIME);
+        String day  = DateUtils.toString(now.toLocalDate());
+        String time = DateUtils.toString(now.toLocalTime());
         return SharedMap.<String, Object>of()
                 .add("acqTrxId", day.substring(2) + sequence(hqId))
                 .add("acqTrxDay", day)
@@ -209,7 +206,7 @@ public final class HyphenStub {
         if (RedisUtils.get(key) != null) return;
         if (!RedisUtils.setNx(SEEDING_KEY + key, "1", SEEDING_TTL)) return;
         RedisUtils.incrBy(key, SEED_BALANCE);
-        logger.info("[시험] 모계좌 시험 잔액을 {}원으로 시작한다: key={}", SEED_BALANCE, key);
+        logger.debug("[시험] 모계좌 시험 잔액을 {}원으로 시작한다: key={}", SEED_BALANCE, key);
     }
 
     /** 모계좌별 시험 일련번호. 운영과 같이 여섯 자리로 돌려 쓴다. */

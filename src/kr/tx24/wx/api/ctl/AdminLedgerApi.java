@@ -132,24 +132,26 @@ public final class AdminLedgerApi {
 
         try {
             // 내부 구간 계약: 허용한 내부 주소와 본사 전용 키를 확인한다.
-            SharedMap<String, Object> input = INetUtils.receiveInternal(channel, request, 8192);
+            SharedMap<String, Object> inputMap = INetUtils.receiveInternal(channel, request, 8192);
             // 접속 주소는 요청이 말하는 값이 아니라 실제 접속 주소를 쓴다.
-            String clientIp = NettyUtils.getRemoteAddress(channel);
-            SharedMap<String, Object> data = switch (operation) {
-                case "hq-withdraw" -> withdrawals.submit(input, trace);
-                case "transfer/settle" -> adminLedgerSvc.settle(input, clientIp, trace);
-                case "deposit/assign"  -> adminLedgerSvc.assignDeposit(input, clientIp, trace);
-                case "deposit/manual"  -> adminLedgerSvc.manualDeposit(input, clientIp, trace);
-                case "deposit/assign-hq" -> adminLedgerSvc.assignHqDeposit(input, clientIp, trace);
-                case "deposit/reject"  -> adminLedgerSvc.rejectDeposit(input, clientIp, trace);
-                case "invoice/bill"    -> adminLedgerSvc.billInvoice(input, clientIp, trace);
-                case "wallet/hold"     -> adminLedgerSvc.hold(input, clientIp, trace);
-                case "webhook/retry"   -> adminLedgerSvc.webhookRetry(input, clientIp, trace);
+            String                    clientIp = NettyUtils.getRemoteAddress(channel);
+
+            SharedMap<String, Object> dataMap  = switch (operation) {
+                case "hq-withdraw" -> withdrawals.submit(inputMap, trace);
+                case "transfer/settle" -> adminLedgerSvc.settle(inputMap, clientIp, trace);
+                case "deposit/assign"  -> adminLedgerSvc.assignDeposit(inputMap, clientIp, trace);
+                case "deposit/manual"  -> adminLedgerSvc.manualDeposit(inputMap, clientIp, trace);
+                case "deposit/assign-hq" -> adminLedgerSvc.assignHqDeposit(inputMap, clientIp, trace);
+                case "deposit/reject"  -> adminLedgerSvc.rejectDeposit(inputMap, clientIp, trace);
+                case "invoice/bill"    -> adminLedgerSvc.billInvoice(inputMap, clientIp, trace);
+                case "wallet/hold"     -> adminLedgerSvc.hold(inputMap, clientIp, trace);
+                case "webhook/retry"   -> adminLedgerSvc.webhookRetry(inputMap, clientIp, trace);
                 default -> throw new WalletException("W001", "요청 경로를 확인해 주세요.");
             };
-            return INetUtils.response(request, data);
+
+            return INetUtils.response(request, dataMap);
         } catch (SecurityException refused) {
-            logger.warn("본사 원장 변경 요청의 경로 또는 키를 거절했다: operation={}, trace={}", operation, trace);
+            logger.info("본사 원장 변경 요청의 경로 또는 키를 거절했다: operation={}, trace={}", operation, trace);
             return INetUtils.response(request, WalletResult.of("W002", "인가되지 않은 접근입니다.", trace));
         } catch (WalletException refused) {
             return INetUtils.response(request, WalletResult.of(refused, trace));

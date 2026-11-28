@@ -1,4 +1,4 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.enm;
 
 /**
  * 원장이 업무 요청을 거절할 때 쓰는 코드다.

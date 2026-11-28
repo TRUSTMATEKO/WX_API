@@ -1,4 +1,6 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.ex;
+
+import kr.tx24.wx.ledger.enm.LedgerCode;
 
 /**
  * 원장이 업무 요청을 거절할 때 던지는 예외다.

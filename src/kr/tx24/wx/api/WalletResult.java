@@ -1,14 +1,12 @@
 package kr.tx24.wx.api;
 
 import com.fasterxml.jackson.databind.node.NullNode;
+import kr.tx24.lib.lang.DateUtils;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.map.TypeRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.Set;
 
 /**
@@ -20,8 +18,6 @@ import java.util.Set;
 public final class WalletResult {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletResult.class);
-    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
-    private static final DateTimeFormatter CREATE = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
     private WalletResult() {
 
@@ -52,7 +48,7 @@ public final class WalletResult {
                 .add("resultCd", code)
                 .add("resultMsg", resultMsg)
                 .add("advanceMsg", advanceMsg)
-                .add("createAt", LocalDateTime.now(SEOUL).format(CREATE));
+                .add("createAt", DateUtils.toString(DateUtils.getZonedDate(WalletPolicy.SEOUL)));
     }
 
     /** 업무 예외는 지정한 코드로 그대로 응답한다. */
@@ -66,34 +62,36 @@ public final class WalletResult {
     /** 코드를 모르는 실패는 원문 없이 시스템 오류로만 응답한다. */
     public static SharedMap<String, Object> of(Exception failure, String trace) {
 
-        logger.warn("Wallet 처리 오류: type={}, trace={}", failure.getClass().getSimpleName(), trace, failure);
+        logger.info("Wallet 처리 오류: type={}, trace={}", failure.getClass().getSimpleName(), trace);
+        logger.debug("Wallet 처리 예외 상세: trace={}", trace, failure);
         return of("W999", "요청을 처리하지 못했습니다.", trace);
     }
 
     /** 내부 원장 결과를 TX24 Wallet의 업무 응답으로 변환한다. */
-    public static SharedMap<String, Object> ledger(String action, SharedMap<String, Object> internal, String trace) {
+    public static SharedMap<String, Object> ledger(String action, SharedMap<String, Object> internalMap, String trace) {
 
-        if (internal.getBoolean("result")) {
-            SharedMap<String, Object> data = internal.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
-            SharedMap<String, Object> reply = of("0000", "정상조회", trace);
-            if (data != null) {
+        if (internalMap.getBoolean("result")) {
+            SharedMap<String, Object> dataMap  = internalMap.getMap("data", TypeRegistry.MAP_SHAREDMAP_OBJECT);
+            SharedMap<String, Object> replyMap = of("0000", "정상조회", trace);
+            if (dataMap != null) {
                 if (action.equals("balance")) {
-                    copyFields(data, reply, Set.of("balance", "availableBalance"));
+                    copyFields(dataMap, replyMap, Set.of("balance", "availableBalance"));
                 } else if (action.equals("holder")) {
-                    copyFields(data, reply, Set.of("trackId", "bankCd", "accntNo", "holder"));
-                } else if (!data.isBlank("trxId")) {
+                    copyFields(dataMap, replyMap, Set.of("trackId", "bankCd", "accntNo", "holder"));
+                } else if (!dataMap.isBlank("trxId")) {
                     if (action.equals("inquiry")) {
-                        copyFields(data, reply, Set.of("rootResultCd", "rootResultMsg"));
+                        copyFields(dataMap, replyMap, Set.of("rootResultCd", "rootResultMsg"));
                     } else if (action.equals("payout")) {
-                        reply = of(data.getString("rootResultCd", "W00X"),
-                                data.getString("rootResultMsg", "결과 확인 중"), trace);
+                        replyMap = of(dataMap.getString("rootResultCd", "W00X"),
+                                dataMap.getString("rootResultMsg", "결과 확인 중"), trace);
                     }
                     for (String name : WalletPolicy.TRANSFER_RESULT_FIELDS) {
-                        reply.put(name, data.getOrDefault(name, NullNode.getInstance()));
+                        replyMap.put(name, dataMap.getOrDefault(name, NullNode.getInstance()));
                     }
                 }
             }
-            return reply;
+
+            return replyMap;
         }
 
         // 원장이 돌린 문구를 그대로 전한다. LedgerEx 의 문구는 고객사에 보여 주려고 쓴 공개 문구다.
@@ -102,8 +100,8 @@ public final class WalletResult {
         // "API 키에 연결된 Wallet 설정을 확인해 주세요." 로 나갔다. 고객사가 원인을 가릴 수 없었다.
         //
         // 인증과 접속 IP 실패만 가린다. 어떤 조건에서 막혔는지 알려 주지 않는다.
-        String reason = internal.getString("message");
-        return switch (internal.getString("code")) {
+        String reason = internalMap.getString("message");
+        return switch (internalMap.getString("code")) {
             case "TX400" -> of("W001", reason.isBlank() ? "요청값을 확인해 주세요." : reason, trace);
             case "TX401", "TX403" -> of("W002", "Wallet 인증 또는 접속 IP 확인에 실패했습니다.", trace);
             case "TX404" -> of("W009", reason.isBlank() ? "거래를 찾을 수 없습니다." : reason, trace);
@@ -114,25 +112,11 @@ public final class WalletResult {
     }
 
     /** Wallet 업무 응답은 엔드포인트에 허용된 원장 필드만 복사한다. */
-    private static void copyFields(SharedMap<String, Object> data, SharedMap<String, Object> reply,
+    private static void copyFields(SharedMap<String, Object> dataMap, SharedMap<String, Object> replyMap,
                                     Set<String> names) {
 
         for (String name : names) {
-            if (data.containsKey(name)) reply.put(name, data.get(name));
+            if (dataMap.containsKey(name)) replyMap.put(name, dataMap.get(name));
         }
-    }
-
-    /** 가상 시험 프로필의 기존 거절 상태를 HTTP 상태로 변환한다. */
-    public static int httpStatus(SharedMap<String, Object> result) {
-
-        if (result.getBoolean("result")) return 200;
-        return switch (result.getString("code")) {
-            case "TX400" -> 400;
-            case "TX401" -> 401;
-            case "TX403" -> 403;
-            case "TX404" -> 404;
-            case "TX409" -> 409;
-            default -> 503;
-        };
     }
 }

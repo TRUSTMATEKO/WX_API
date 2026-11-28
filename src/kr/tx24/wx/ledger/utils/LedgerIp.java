@@ -1,4 +1,4 @@
-package kr.tx24.wx.ledger;
+package kr.tx24.wx.ledger.utils;
 
 import io.netty.util.NetUtil;
 

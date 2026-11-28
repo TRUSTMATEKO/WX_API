@@ -2,35 +2,22 @@ package kr.tx24.wx.api.rps;
 
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletException;
-import kr.tx24.wx.ledger.LedgerEx;
-import kr.tx24.wx.ledger.WxDepositRps;
-import kr.tx24.wx.ledger.WxHealthRps;
-import kr.tx24.wx.ledger.WxHoldRps;
-import kr.tx24.wx.ledger.WxHolderRps;
-import kr.tx24.wx.ledger.WxInvoiceRps;
-import kr.tx24.wx.ledger.WxMerchantRps;
-import kr.tx24.wx.ledger.WxTransferRps;
-import kr.tx24.wx.ledger.WxWalletMoveRps;
-import kr.tx24.wx.ledger.WxWebhookRps;
+import kr.tx24.wx.ledger.ex.LedgerEx;
+import kr.tx24.wx.ledger.rps.WxDepositRps;
+import kr.tx24.wx.ledger.rps.WxHealthRps;
+import kr.tx24.wx.ledger.rps.WxHoldRps;
+import kr.tx24.wx.ledger.rps.WxHolderRps;
+import kr.tx24.wx.ledger.rps.WxInvoiceRps;
+import kr.tx24.wx.ledger.rps.WxMerchantRps;
+import kr.tx24.wx.ledger.rps.WxTransferRps;
+import kr.tx24.wx.ledger.rps.WxWalletMoveRps;
+import kr.tx24.wx.ledger.rps.WxWebhookRps;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
-/**
- * WX 원장 쓰기와 조회를 전담한다.
- *
- * <p>WX_API가 원장 소유 프로세스다. 고객사 요청과 본사 요청 모두 이 프로세스의 DB 트랜잭션에서
- * 확정된다. 업무 계층은 이 클래스의 메서드만 쓰고 {@code kr.tx24.wx.ledger}를 직접 부르지 않는다.</p>
- *
- * <p>종전에는 이 클래스가 WX_ADM의 내부 INet 경로를 호출하는 대리자였다. 원장이 본사 관리자 쪽에
- * 있어 고객사 요청 한 건이 두 프로세스를 지나야 했고 호출 방향도 WX_API → WX_ADM 으로 거꾸로였다.
- * 원장을 이 프로세스로 옮겨 호출 방향을 WX_ADM → WX_API 한 방향으로 정리했다.</p>
- *
- * <p>응답 모양은 종전 내부 구간 계약을 유지한다. 성공은 {@code result=true}와 {@code data},
- * 거절은 {@code result=false}와 {@code code}·{@code message}다.
- * {@code WalletResult.ledger}가 이 모양을 읽는다.</p>
- */
+/** 고객사와 본사 업무에서 사용하는 WX 원장 조회·변경 및 결과 코드 변환을 담당한다. */
 public final class WalletLedgerRps {
 
     private static final Logger logger = LoggerFactory.getLogger(WalletLedgerRps.class);
@@ -46,7 +33,8 @@ public final class WalletLedgerRps {
     /** 인증: 키 해시와 접속 IP로 키에 연결된 Wallet을 확인한다. */
     public SharedMap<String, Object> authorize(String keyHash, String clientIp, String trace) {
 
-        return merchant("authorize", request("authorize", keyHash, clientIp), trace);
+        SharedMap<String, Object> inMap = request("authorize", keyHash, clientIp);
+        return merchant(inMap, trace);
     }
 
     /**
@@ -54,21 +42,24 @@ public final class WalletLedgerRps {
      *
      * <p>업무별로 전달할 필드가 다르다. 허용한 필드만 담고 그 밖의 값은 넘기지 않는다.</p>
      */
-    public SharedMap<String, Object> query(String action, SharedMap<String, Object> input, String keyHash,
+    public SharedMap<String, Object> query(String action, SharedMap<String, Object> inputMap, String keyHash,
                                             String clientIp, String trace) {
 
-        SharedMap<String, Object> in = request(action, keyHash, clientIp).add("authorizedWalletId", input.getString("authorizedWalletId"));
+        // 인증으로 결정한 Wallet에 업무별 조회 조건만 추가한다.
+        SharedMap<String, Object> inMap = request(action, keyHash, clientIp)
+                .add("walletId", inputMap.getString("walletId"));
         if (action.equals("inquiry")) {
-            in.add("trxId", input.getString("trxId"))
-                    .add("trackId", input.getString("trackId"))
-                    .add("trxDay", input.getString("trxDay"));
+            inMap
+                    .add("trxId", inputMap.getString("trxId"))
+                    .add("trackId", inputMap.getString("trackId"))
+                    .add("trxDay", inputMap.getString("trxDay"));
+        } else if (action.equals("holder")) {
+            inMap
+                    .add("trackId", inputMap.getString("trackId"))
+                    .add("bankCd", inputMap.getString("bankCd"))
+                    .add("accntNo", inputMap.getString("accntNo"));
         }
-        if (action.equals("holder")) {
-            in.add("trackId", input.getString("trackId"))
-                    .add("bankCd", input.getString("bankCd"))
-                    .add("accntNo", input.getString("accntNo"));
-        }
-        return merchant(action, in, trace);
+        return merchant(inMap, trace);
     }
 
     /**
@@ -77,26 +68,26 @@ public final class WalletLedgerRps {
      * <p>수취 계좌번호의 마스킹과 암호화는 원장이 수행한다. 저장 주체가 이 프로세스이므로
      * 평문이 다른 프로세스로 넘어가지 않는다.</p>
      */
-    public SharedMap<String, Object> accept(SharedMap<String, Object> input, String keyHash, String clientIp,
+    public SharedMap<String, Object> accept(SharedMap<String, Object> inputMap, String keyHash, String clientIp,
                                              String trace) {
 
-        SharedMap<String, Object> in = request("payout", keyHash, clientIp)
-                .add("authorizedWalletId", input.getString("authorizedWalletId"))
-                .add("trackId", input.getString("trackId"))
-                .add("bankCd", input.getString("bankCd"))
-                .add("accntNo", input.getString("accntNo"))
-                .add("amount", input.getLong("amount"))
-                .add("sender", input.getString("sender"))
-                .add("holder", input.getString("holder"))
-                .add("ioId", input.getString("ioId"))
-                .add("requestHash", input.getString("requestHash"));
-        return merchant("payout", in, trace);
+        SharedMap<String, Object> inMap = request("payout", keyHash, clientIp)
+                .add("walletId", inputMap.getString("walletId"))
+                .add("trackId", inputMap.getString("trackId"))
+                .add("bankCd", inputMap.getString("bankCd"))
+                .add("accntNo", inputMap.getString("accntNo"))
+                .add("amount", inputMap.getLong("amount"))
+                .add("sender", inputMap.getString("sender"))
+                .add("holder", inputMap.getString("holder"))
+                .add("ioId", inputMap.getString("ioId"))
+                .add("requestHash", inputMap.getString("requestHash"));
+        return merchant(inMap, trace);
     }
 
     /** API 요청 이력: 접수와 완료 시점을 기록한다. 본문 원문과 키는 저장하지 않는다. */
-    public void recordIo(SharedMap<String, Object> io, String trace) throws Exception {
+    public void recordIo(SharedMap<String, Object> ioMap, String trace) throws Exception {
 
-        WxMerchantRps.recordIo(io);
+        WxMerchantRps.recordIo(ioMap);
     }
 
     /**
@@ -116,15 +107,21 @@ public final class WalletLedgerRps {
     }
 
     /** 송금 확정: 기관 응답으로 원장 상태와 잔액을 확정한다. */
-    public SharedMap<String, Object> confirm(SharedMap<String, Object> command, String trace) {
+    public SharedMap<String, Object> confirm(SharedMap<String, Object> commandMap, String trace) {
 
-        return ledger("transfer/confirm", trace, () -> WxTransferRps.confirm(command));
+        return ledger("transfer/confirm", trace, () -> WxTransferRps.confirm(commandMap));
     }
 
-    /** 통신장애 재조회 대상을 장애 큐에서 꺼내 온다. */
+    /** 미전송 만료와 기관 재조회 대상을 원장에서 선점한다. */
     public List<SharedMap<String, Object>> pending(int limit, String trace) throws Exception {
 
         return WxTransferRps.pending(limit);
+    }
+
+    /** 송금 재조회 작업이 기관 전송 전 만료된 고객사 송금을 원복한다. */
+    public boolean expireUnsent(String trxId) throws java.sql.SQLException {
+
+        return WxTransferRps.expireUnsent(trxId);
     }
 
     /**
@@ -132,23 +129,23 @@ public final class WalletLedgerRps {
      *
      * <p>조회 대상 계좌번호의 마스킹과 암호화는 원장이 수행한다.</p>
      */
-    public SharedMap<String, Object> holder(SharedMap<String, Object> input, String keyHash, String clientIp,
+    public SharedMap<String, Object> holder(SharedMap<String, Object> inputMap, String keyHash, String clientIp,
                                              String trace) {
 
-        SharedMap<String, Object> in = request("holder", keyHash, clientIp)
-                .add("authorizedWalletId", input.getString("authorizedWalletId"))
-                .add("trackId", input.getString("trackId"))
-                .add("bankCd", input.getString("bankCd"))
-                .add("accntNo", input.getString("accntNo"))
-                .add("ioId", input.getString("ioId"))
-                .add("requestHash", input.getString("requestHash"));
-        return merchant("holder", in, trace);
+        SharedMap<String, Object> inMap = request("holder", keyHash, clientIp)
+                .add("walletId", inputMap.getString("walletId"))
+                .add("trackId", inputMap.getString("trackId"))
+                .add("bankCd", inputMap.getString("bankCd"))
+                .add("accntNo", inputMap.getString("accntNo"))
+                .add("ioId", inputMap.getString("ioId"))
+                .add("requestHash", inputMap.getString("requestHash"));
+        return merchant(inMap, trace);
     }
 
     /** 예금주 조회 확정: 기관 응답으로 결과와 과금 대상 여부를 확정한다. */
-    public SharedMap<String, Object> holderConfirm(SharedMap<String, Object> command, String trace) {
+    public SharedMap<String, Object> holderConfirm(SharedMap<String, Object> commandMap, String trace) {
 
-        return ledger("holder/confirm", trace, () -> WxHolderRps.confirm(command));
+        return ledger("holder/confirm", trace, () -> WxHolderRps.confirm(commandMap));
     }
 
     /**
@@ -159,10 +156,12 @@ public final class WalletLedgerRps {
      *
      * @param direction {@code collect}는 고객사에서 본사로, {@code payout}은 본사에서 고객사로
      */
-    public SharedMap<String, Object> move(String direction, SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> move(String direction, SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("move/" + direction, trace, () -> "collect".equals(direction)
-                ? WxWalletMoveRps.collect(input) : WxWalletMoveRps.payout(input));
+        if ("collect".equals(direction)) {
+            return ledger("move/collect", trace, () -> WxWalletMoveRps.collect(inputMap));
+        }
+        return ledger("move/" + direction, trace, () -> WxWalletMoveRps.payout(inputMap));
     }
 
     /**
@@ -171,16 +170,17 @@ public final class WalletLedgerRps {
      * <p>운영자 화면이라고 다른 계약을 쓰지 않는다. 성공이면 모계좌 장부잔액을 줄이고
      * 실패면 트리거가 차감한 금액을 원복한다.</p>
      */
-    public SharedMap<String, Object> settle(SharedMap<String, Object> command, String trace) {
+    public SharedMap<String, Object> settle(SharedMap<String, Object> commandMap, String trace) {
 
-        return ledger("transfer/settle", trace, () -> WxTransferRps.confirm(command));
+        return ledger("transfer/settle", trace, () -> WxTransferRps.confirm(commandMap));
     }
 
     /** 입금 수신: 통지를 기록하고 Wallet이 하나로 정해지면 입금으로 반영한다. */
-    public SharedMap<String, Object> receiveDeposit(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> receiveDeposit(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("deposit/receive", trace, () -> WxDepositRps.receive(input));
+        return ledger("deposit/receive", trace, () -> WxDepositRps.receive(inputMap));
     }
+
     /** 모계좌 잔액 동기화: 기관이 알려준 실제 잔액으로 장부잔액을 맞춘다. */
     public long bankBalanceRevision(String hqId) throws java.sql.SQLException {
 
@@ -194,63 +194,66 @@ public final class WalletLedgerRps {
     }
 
     /** 입금 잔액 대조: 기관 조회 당시 원장 순번이 유지된 경우에만 반영한다. */
-    public SharedMap<String, Object> syncBankBalance(SharedMap<String, Object> job, long reported, long revision,
+    public SharedMap<String, Object> syncBankBalance(SharedMap<String, Object> jobMap, long reported, long revision,
                                                       String trace) {
 
-        return ledger("deposit/balance", trace, () -> WxDepositRps.syncBalance(job, reported, revision));
+        return ledger("deposit/balance", trace, () -> WxDepositRps.syncBalance(jobMap, reported, revision));
     }
 
     /** 본사 입금 지정: 미매칭 입금을 지정 Wallet의 확정 원장에 입금으로 반영한다. */
-    public SharedMap<String, Object> assignDeposit(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> assignDeposit(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("deposit/assign", trace, () -> WxDepositRps.assign(input));
+        return ledger("deposit/assign", trace, () -> WxDepositRps.assign(inputMap));
     }
 
     /** 본사 수동 입금: 통지가 오지 않은 입금을 기록하고 고른 Wallet 에 반영한다. */
-    public SharedMap<String, Object> manualDeposit(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> manualDeposit(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("deposit/manual", trace, () -> WxDepositRps.manual(input));
+        return ledger("deposit/manual", trace, () -> WxDepositRps.manual(inputMap));
     }
 
     /** 본사 입금: 미매칭 입금을 그 모계좌의 본사 Wallet 에 반영한다(이자·환급 등). */
-    public SharedMap<String, Object> assignHqDeposit(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> assignHqDeposit(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("deposit/assign-hq", trace, () -> WxDepositRps.assignHq(input));
+        return ledger("deposit/assign-hq", trace, () -> WxDepositRps.assignHq(inputMap));
     }
 
     /** 본사 입금 반려: 매칭하지 않고 사유를 남겨 입금을 종결한다. */
-    public SharedMap<String, Object> rejectDeposit(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> rejectDeposit(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("deposit/reject", trace, () -> WxDepositRps.reject(input));
+        return ledger("deposit/reject", trace, () -> WxDepositRps.reject(inputMap));
     }
 
     /**
      * Wallet 보류 설정과 해제: 지정한 금액으로 보류액을 바꾼다.
      *
-     * <p>장부잔액은 바띀지 않는다. 출금가능잔액만 다시 계산된다.</p>
+     * <p>장부잔액은 바뀌지 않는다. 출금가능잔액만 다시 계산된다.</p>
      */
-    public SharedMap<String, Object> hold(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> hold(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("wallet/hold", trace, () -> WxHoldRps.apply(input));
+        return ledger("wallet/hold", trace, () -> WxHoldRps.apply(inputMap));
     }
 
     /** 본사 월 청구: 대기 청구서를 청구로 바꾸고 청구일을 기록한다. */
-    public SharedMap<String, Object> billInvoice(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> billInvoice(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("invoice/bill", trace, () -> WxInvoiceRps.bill(input));
+        return ledger("invoice/bill", trace, () -> WxInvoiceRps.bill(inputMap));
     }
 
     /** 웹훅 재발송: 대기 상태를 제외한 발송을 다시 대기로 돌린다. */
-    public SharedMap<String, Object> webhookRetry(SharedMap<String, Object> input, String trace) {
+    public SharedMap<String, Object> webhookRetry(SharedMap<String, Object> inputMap, String trace) {
 
-        return ledger("webhook/retry", trace, () -> SharedMap.<String, Object>of()
-                .add("id", input.getString("hookId"))
-                .add("changed",
-                        WxWebhookRps.retry(input.getString("hookId"), input.getString("userId")) == 1));
+        return ledger("webhook/retry", trace, () -> {
+            String hookId  = inputMap.getString("hookId");
+            int    updated = WxWebhookRps.retry(hookId, inputMap.getString("userId"));
+            return SharedMap.<String, Object>of()
+                    .add("id", hookId)
+                    .add("changed", updated == 1);
+        });
     }
 
 
-    /** --check: 거래 실행 없이 WX 연결과 업무 스키마를 확인한다. */
+    /** 기동 점검에서 거래 실행 없이 WX 연결과 업무 스키마를 확인한다. */
     public void health() throws Exception {
 
         WxHealthRps.api();
@@ -271,19 +274,20 @@ public final class WalletLedgerRps {
      * <p>원장 처리 자체가 실패한 경우는 {@code TX500}으로 올린다. 종전 내부 구간의
      * {@code /api/internal/wallet/merchant} 응답과 같은 코드다.</p>
      */
-    private static SharedMap<String, Object> merchant(String operation, SharedMap<String, Object> in,
-                                                       String trace) {
+    private static SharedMap<String, Object> merchant(SharedMap<String, Object> inMap, String trace) {
 
+        String operation = inMap.getString("operation");
         try {
-            return ok(WxMerchantRps.query(in));
+            return ok(WxMerchantRps.query(inMap));
         } catch (LedgerEx refused) {
             // 거절 사유를 남긴다. 고객사 응답은 일반 문구로 바뀌므로 여기 안 남기면 원인을 찾을 길이 없다.
-            logger.warn("원장 조회 거절: operation={}, code={}, reason={}, trace={}",
+            logger.info("원장 조회 거절: operation={}, code={}, reason={}, trace={}",
                     operation, refused.getCode().getCode(), refused.getMessage(), trace);
             return error(refused);
         } catch (Exception failure) {
-            logger.warn("원장 조회 실패: operation={}, type={}, trace={}",
-                    operation, failure.getClass().getSimpleName(), trace, failure);
+            logger.info("원장 조회 실패: operation={}, type={}, trace={}",
+                    operation, failure.getClass().getSimpleName(), trace);
+            logger.debug("원장 조회 예외 상세: operation={}, trace={}", operation, trace, failure);
             return error("TX500", "원장 응답을 확인해 주세요.");
         }
     }
@@ -298,22 +302,23 @@ public final class WalletLedgerRps {
         try {
             return ok(work.run());
         } catch (LedgerEx refused) {
-            logger.warn("원장 처리 거절: operation={}, code={}, reason={}, trace={}",
+            logger.info("원장 처리 거절: operation={}, code={}, reason={}, trace={}",
                     operation, refused.getCode().getCode(), refused.getMessage(), trace);
             return error(refused);
         } catch (Exception failure) {
-            logger.warn("원장 처리 실패: operation={}, type={}, trace={}",
-                    operation, failure.getClass().getSimpleName(), trace, failure);
+            logger.info("원장 처리 실패: operation={}, type={}, trace={}",
+                    operation, failure.getClass().getSimpleName(), trace);
+            logger.debug("원장 처리 예외 상세: operation={}, trace={}", operation, trace, failure);
             return error("TX503", "내부 요청을 처리하지 못했습니다.");
         }
     }
 
     /** 성공 응답. 종전 내부 구간과 같은 result·data 모양을 유지한다. */
-    private static SharedMap<String, Object> ok(SharedMap<String, Object> data) {
+    private static SharedMap<String, Object> ok(SharedMap<String, Object> dataMap) {
 
         return SharedMap.<String, Object>of()
                 .add("result", true)
-                .add("data", data == null ? SharedMap.<String, Object>of() : data);
+                .add("data", dataMap == null ? SharedMap.<String, Object>of() : dataMap);
     }
 
     /** 업무 거절. 원장이 정한 코드와 공개 문구만 담는다. */
@@ -325,7 +330,10 @@ public final class WalletLedgerRps {
     /** 거절 응답. 키·원문·계좌를 포함하지 않는 코드와 공개 문구만 반환한다. */
     private static SharedMap<String, Object> error(String code, String message) {
 
-        return SharedMap.<String, Object>of().add("result", false).add("code", code).add("message", message);
+        return SharedMap.<String, Object>of()
+                .add("result", false)
+                .add("code", code)
+                .add("message", message);
     }
 
     /** 원장 확정 처리 한 건. 업무 거절은 {@link LedgerEx}로, 그 밖의 실패는 일반 예외로 올린다. */
