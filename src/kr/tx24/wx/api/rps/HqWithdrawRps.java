@@ -328,7 +328,7 @@ public final class HqWithdrawRps {
                 changed(tx.update("UPDATE WX.HQ_ACCNT SET reservedAmt=reservedAmt-?,balance=balance-? WHERE id=? AND reservedAmt>=?",
                         amount, success ? amount : 0, hqId, amount));
                 if (success) {
-                    int day = Integer.parseInt(DateUtils.toString(DateUtils.getZonedDate(WalletPolicy.SEOUL).toLocalDate()));
+                    int day = DateUtils.getRegDay();
                     tx.update(new Update()
                             .table("WX.TRX_WALLET")
                             .record("hqBalanceBef", before)
