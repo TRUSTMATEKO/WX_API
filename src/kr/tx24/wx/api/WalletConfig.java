@@ -36,10 +36,10 @@ public final class WalletConfig {
         UPSTREAM_ENV = readEnvironment();
         if ("test".equals(UPSTREAM_ENV)) {
             // 설정대로 동작하는 상태이므로 기동 사실만 남긴다.
-            logger.info("기관 전송 환경이 test 이다. HYPHEN 과 통신하지 않고 더미 응답으로 처리한다. "
+            logger.info("기관 전송 환경이 test 이다. 송금은 더미 응답으로 처리하고 예금주 조회는 기관 시험망을 사용한다. "
                     + "실제 송금은 일어나지 않으며 모계좌 잔액은 Redis 의 시험 잔액을 쓴다.");
         } else {
-            logger.info("기관 전송 환경이 prod 이다. HYPHEN 으로 실제 전문을 보낸다.");
+            logger.info("기관 전송 환경이 prod 이다. 송금과 예금주 조회는 각각 설정된 운영 기관으로 전문을 보낸다.");
         }
     }
 

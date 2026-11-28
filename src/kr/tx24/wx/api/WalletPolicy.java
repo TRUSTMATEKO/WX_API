@@ -29,6 +29,10 @@ public final class WalletPolicy {
     /** 기관에 전문을 보내기 전 단계에서 끝난 실패. 잔액을 즉시 원복한다. */
     public static final String NOT_SENT = "W005";
 
+    /** 모계좌에 등록했으나 아직 사용할 수 없는 기관에 대한 응답이다. */
+    public static final String INACTIVE_ACQUIRER     = "W014";
+    public static final String INACTIVE_ACQUIRER_MSG = "현재 사용하지 않는 연동 기관입니다.";
+
     /** 송금 확정 상태. WX_ADM의 확정 계약과 같은 값을 쓴다. */
     public static final String OUTCOME_SUCCESS = "성공";
     public static final String OUTCOME_FAILED  = "실패";

@@ -19,6 +19,7 @@ import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.redis.RedisTextUtils;
 import kr.tx24.wx.api.WalletException;
 import kr.tx24.wx.api.WalletPolicy;
+import kr.tx24.wx.api.Acquirer;
 
 /** 본사 외부 출금의 과금 상세 점유, Wallet 선차감, 은행 예약과 확정을 한 거래로 기록한다. */
 public final class HqWithdrawRps {
@@ -86,6 +87,10 @@ public final class HqWithdrawRps {
 
                 return SharedMap.<String, Object>of()
                         .add("status", previousMap.getString("status"));
+            }
+
+            if (bankMap != null && Acquirer.from(bankMap.getString("acq")).isInactive()) {
+                throw new WalletException(WalletPolicy.INACTIVE_ACQUIRER, WalletPolicy.INACTIVE_ACQUIRER_MSG);
             }
 
             // 승인 때의 계좌 설정 버전과 대조한 뒤 지정된 수취 계좌를 복호화한다.

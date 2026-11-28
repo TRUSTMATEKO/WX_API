@@ -95,7 +95,7 @@ public final class TransferSvc {
 
         AtomicBoolean referenceRecorded = new AtomicBoolean(false);
         try {
-            HyphenSvc                 channel    = new HyphenSvc(upstream(acceptedMap));
+            UpstreamSvc               channel    = UpstreamSvc.open(upstream(acceptedMap));
             SharedMap<String, Object> requestMap = SharedMap.<String, Object>of()
                     .add("amount", Long.toString(amount))
                     .add("recvBankCd", acceptedMap.getString("bankCd"))

@@ -121,7 +121,7 @@ public final class DepositSvc {
                 return false;
             }
 
-            SharedMap<String, Object> repliedMap = new HyphenSvc(TransferSvc.upstream(dataMap)).balance();
+            SharedMap<String, Object> repliedMap = UpstreamSvc.open(TransferSvc.upstream(dataMap)).balance();
             if (!WalletPolicy.SUCCEEDED.equals(repliedMap.getString("acqResultCd"))
                     || !repliedMap.containsKey("balance")) {
                 logger.info("기관 잔액 조회가 성공하지 않아 맞추지 않는다: hqId={}, acqResultCd={}, trace={}",

@@ -92,7 +92,7 @@ public final class RecoverySvc {
         String acqTrxId = rowMap.getString("bankTrxId");
         SharedMap<String, Object> inquiryMap;
         try {
-            inquiryMap = new HyphenSvc(TransferSvc.upstream(rowMap)).transferResult(acqTrxId);
+            inquiryMap = UpstreamSvc.open(TransferSvc.upstream(rowMap)).transferResult(acqTrxId);
         } catch (Exception failure) {
             logger.debug("기관 원거래 조회 호출 실패: trxId={}, acqTrxId={}, trace={}",
                     trxId, acqTrxId, trace, failure);

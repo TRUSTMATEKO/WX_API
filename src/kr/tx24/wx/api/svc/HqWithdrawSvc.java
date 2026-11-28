@@ -69,7 +69,7 @@ public final class HqWithdrawSvc {
         AtomicBoolean referenceRecorded = new AtomicBoolean();
         SharedMap<String, Object> bankMap;
         try {
-            HyphenSvc                 channel    = channel(acceptedMap);
+            UpstreamSvc               channel    = channel(acceptedMap);
             SharedMap<String, Object> requestMap = SharedMap.<String, Object>of()
                     .add("amount", amount)
                     .add("recvBankCd", acceptedMap.getString("bankCd"))
@@ -158,14 +158,11 @@ public final class HqWithdrawSvc {
     }
 
     /** 출금 접수 시 고정한 기관·계좌에 해당하는 송금 채널을 연다. */
-    private static HyphenSvc channel(SharedMap<String, Object> rowMap) {
+    private static UpstreamSvc channel(SharedMap<String, Object> rowMap) {
 
-        if (!rowMap.isEquals("acq", "HYPHEN")) {
-            throw new WalletException("W003", "모계좌 기관 설정을 확인해 주세요.");
-        }
         SharedMap<String, Object> profileMap = rowMap.copy()
                 .add("upstream.enabled", true)
                 .add("env", WalletConfig.upstreamEnv());
-        return new HyphenSvc(profileMap);
+        return UpstreamSvc.open(profileMap);
     }
 }

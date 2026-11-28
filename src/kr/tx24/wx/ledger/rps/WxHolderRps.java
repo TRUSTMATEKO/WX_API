@@ -1,7 +1,5 @@
 package kr.tx24.wx.ledger.rps;
 
-import kr.tx24.wx.api.WalletPolicy;
-
 import java.util.List;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -45,8 +43,7 @@ public final class WxHolderRps {
     /**
      * 예금주 조회 접수. 요청을 기록하고 기관 전송 입력을 돌려준다.
      *
-     * <p>호출자는 업무 트랜잭션을 연 상태여야 한다. 기관 연동 설정이 없으면 접수하지 않는다.
-     * 보낼 수 없는 요청을 접수하면 과금 대상만 늘어난다.</p>
+     * <p>호출자는 공통 기관 설정을 확인한 후 업무 트랜잭션에서 접수한다.</p>
      */
     static SharedMap<String, Object> accept(Connection db, SharedMap<String, Object> inMap, String company,
                                              String walletId, LocalDateTime now) throws SQLException {
@@ -73,24 +70,6 @@ public final class WxHolderRps {
                 """, walletId, company);
         if (walletList.size() != 1) throw new LedgerEx(LedgerCode.WALLET_UNAVAILABLE, "Wallet 사용 상태를 확인해 주세요.");
 
-        // 기관 연동 설정은 접수 전에 확인한다. 보낼 수 없는 요청을 과금 대상으로 남기지 않는다.
-        List<SharedMap<String, Object>> bankList = rows(db, """
-                SELECT id,acq,acqId,bankCd AS acqBankCd,accntNo AS acqAccount,COALESCE(key2,'') AS acqKey2
-                  FROM WX.HQ_ACCNT WHERE id=? AND status='사용'
-                """, walletList.get(0).getString("hqId"));
-        if (bankList.size() != 1) {
-            logger.info("모계좌 사용 상태가 아니어서 예금주 조회를 접수하지 않는다: hqId={}",
-                    walletList.get(0).getString("hqId"));
-            throw new LedgerEx(LedgerCode.REQUEST_UNAVAILABLE, "예금주 조회를 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
-        }
-
-        SharedMap<String, Object> upstreamMap = upstream(bankList.get(0));
-        if (upstreamMap == null) {
-            logger.warn("모계좌 기관 연동 설정이 없어 예금주 조회를 접수하지 않는다: hqId={}, acq={}",
-                    bankList.get(0).getString("id"), bankList.get(0).getString("acq"));
-            throw new LedgerEx(LedgerCode.UNAVAILABLE, "기관 연동 설정이 없어 예금주 조회가 중지되었습니다.");
-        }
-
         SharedMap<String, Object> rateMap = fee(db, company, day);
         long                      charge  = rateMap.getLong("feeAmt");
         String                    trxId   = IDUtils.getUnique("V");
@@ -115,8 +94,7 @@ public final class WxHolderRps {
                 .add("accntNo", accntNo)
                 .add("accntNoMasked", masked)
                 .add("feeAmt", charge)
-                .add("hqId", walletList.get(0).getString("hqId"))
-                .add("upstream", upstreamMap);
+                .add("hqId", walletList.get(0).getString("hqId"));
     }
 
     /**
@@ -189,23 +167,5 @@ public final class WxHolderRps {
         return SharedMap.<String, Object>of()
                 .add("feeAmt", appliedList.get(0).getLong("holderUnitAmt"))
                 .add("feeRateIdx", appliedList.get(0).getLong("idx"));
-    }
-
-    /** 모계좌의 기관 연동 설정을 WX_API가 사용할 조회 프로필로 만든다. 송금과 같은 계약이다. */
-    private static SharedMap<String, Object> upstream(SharedMap<String, Object> bankMap) {
-
-        if (!"HYPHEN".equals(bankMap.getString("acq")) || !WalletPolicy.isValidAcqSid(bankMap.getString("acqId"))
-                || bankMap.isBlank("acqBankCd")
-                || bankMap.isBlank("acqAccount") || bankMap.isBlank("acqKey2")) {
-            return null;
-        }
-        // 모계좌 ID 는 기관 거래 일련번호를 모계좌별로 나누는 키에 쓴다. 보호값이 아니다.
-        return SharedMap.<String, Object>of()
-                .add("hqId", bankMap.getString("id"))
-                .add("acq", bankMap.getString("acq"))
-                .add("acqSid", bankMap.getString("acqId"))
-                .add("acqBankCd", bankMap.getString("acqBankCd"))
-                .add("acqAccount", bankMap.getString("acqAccount"))
-                .add("acqKey2", bankMap.getString("acqKey2"));
     }
 }

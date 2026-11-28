@@ -36,6 +36,7 @@ public enum LedgerCode {
     WALLET_UNAVAILABLE(CONFLICT),
     INSUFFICIENT_BALANCE(CONFLICT),
     REQUEST_UNAVAILABLE(CONFLICT),
+    INACTIVE_ACQUIRER(CONFLICT),
 
     /** 설정이나 운영시간 정책 때문에 접수를 중지했다. */
     UNAVAILABLE("TX503", "현재 서비스를 이용할 수 없습니다.");

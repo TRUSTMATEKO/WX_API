@@ -4,6 +4,8 @@ import kr.tx24.inet.mapper.Autowired;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.lib.map.TypeRegistry;
 import kr.tx24.wx.api.WalletException;
+import kr.tx24.wx.api.WalletConfig;
+import kr.tx24.wx.api.holder.HolderProvider;
 import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.api.WalletResult;
 import kr.tx24.wx.api.ctx.WalletContext;
@@ -31,11 +33,13 @@ public final class HolderSvc {
     /** 예금주 조회: 접수하고 기관에 물어 결과를 확정한다. */
     public SharedMap<String, Object> holder(WalletContext etx) {
 
-        // 인증한 Wallet과 요청 이력으로 조회를 접수한 뒤 접수 건에 연결된 계좌를 기관에 보낸다.
+        // 인증한 Wallet으로 접수하고 시스템 설정의 기관에 수취 계좌를 보낸다.
         SharedMap<String, Object> inputMap = etx.getInput();
         inputMap.put("walletId", etx.getWalletId());
         inputMap.put("ioId", etx.getIo().getString("ioId"));
         inputMap.put("requestHash", etx.getIo().getString("requestHash"));
+
+        HolderProvider provider = HolderProvider.open(ledger.holderConfig(), WalletConfig.upstreamEnv());
 
         SharedMap<String, Object> receiptMap;
         try {
@@ -60,9 +64,9 @@ public final class HolderSvc {
 
         SharedMap<String, Object> repliedMap;
         try {
-            repliedMap = new HyphenSvc(TransferSvc.upstream(acceptedMap))
-                    .holder(acceptedMap.getString("bankCd"), acceptedMap.getString("accntNo"));
+            repliedMap = provider.holder(acceptedMap.getString("bankCd"), acceptedMap.getString("accntNo"));
         } catch (Exception failure) {
+            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
             // 조회는 자금이 움직이지 않는다. 실패로 확정하고 고객사가 다시 물어보게 한다.
             logger.debug("기관 예금주 조회 실패: trxId={}, trace={}", trxId, etx.getTrace(), failure);
             repliedMap = SharedMap.<String, Object>of()
@@ -70,7 +74,7 @@ public final class HolderSvc {
                     .add("acqResultMsg", "통신장애, 다시 조회해 주세요.");
         }
 
-        // 기관 성공 코드라도 이름이 비어 있으면 불일치로 기록하고 성공 과금에서 제외한다.
+        // 기관 성공 코드라도 이름이 비어 있으면 원장에 불일치로 기록한다.
         String code = repliedMap.getString("acqResultCd");
         String name = repliedMap.getString("holder").strip();
         String outcome;
@@ -115,10 +119,11 @@ public final class HolderSvc {
         if (WalletPolicy.OUTCOME_SUCCESS.equals(outcome)) {
             replyMap = WalletResult.of(WalletPolicy.SUCCEEDED, "정상조회", etx.getTrace());
             replyMap.put("holder", name);
+        } else if (MISMATCH.equals(outcome)) {
+            replyMap = WalletResult.of("W016", "기관 응답에 예금주명이 없습니다.", etx.getTrace());
         } else {
-            String resultCd = MISMATCH.equals(outcome) ? "W010" : code;
             String message  = repliedMap.getString("acqResultMsg", "예금주를 확인하지 못했습니다.");
-            replyMap = WalletResult.of(resultCd, message, etx.getTrace());
+            replyMap = WalletResult.of(code, message, etx.getTrace());
         }
         replyMap.put("trackId", acceptedMap.getString("trackId"));
         replyMap.put("bankCd",  acceptedMap.getString("bankCd"));

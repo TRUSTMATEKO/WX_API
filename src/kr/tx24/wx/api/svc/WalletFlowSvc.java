@@ -22,8 +22,8 @@ public final class WalletFlowSvc {
     private static final Logger logger = LoggerFactory.getLogger(WalletFlowSvc.class);
 
     /** 인증 및 거래 거절 응답에서 Wallet ID를 생략하는 코드다. */
-    private static final Set<String> HIDDEN_WALLET_CODES = Set.of("W002", "W004", "W011", "W012", "W013", "W014",
-            "W015", "W016");
+    private static final Set<String> HIDDEN_WALLET_CODES = Set.of("W002", "W004", "W006", "W007", "W008", "W011",
+            "W012", "W013");
 
     private final WalletValidator validator;
     private final TransferValidator transferValidator;

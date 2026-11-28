@@ -111,6 +111,7 @@ public final class WxTransferRps {
             logger.info("모계좌 사용 상태가 아니어서 송금을 접수하지 않는다: hqId={}", hqId);
             throw new LedgerEx(LedgerCode.REQUEST_UNAVAILABLE, "송금을 접수할 수 없습니다. 잠시 후 다시 시도해 주세요.");
         }
+        WxMerchantRps.requireActiveAcquirer(bankList.get(0));
         List<SharedMap<String, Object>> walletList = rows(db, new Retrieve("WX.WALLET w")
                 .columns("w.id,w.mchtId,w.hqId,w.editRev")
                 .column("b.balance,b.held,b.available")

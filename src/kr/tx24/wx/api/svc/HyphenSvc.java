@@ -16,7 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /** 모계좌 환경에 따라 HYPHEN 운영 전문 또는 시험 응답을 처리한다. */
-public final class HyphenSvc {
+public final class HyphenSvc implements UpstreamSvc {
 
     private static final Logger logger = LoggerFactory.getLogger(HyphenSvc.class);
 
@@ -37,6 +37,7 @@ public final class HyphenSvc {
     }
 
     /** 직접 송금: 호출자는 영속 예약·기관 거래 식별자·재조회 계약을 확보한 뒤 한 번만 호출한다. */
+    @Override
     public SharedMap<String, Object> transfer(SharedMap<String, Object> inputMap, Consumer<String> recordBeforeSend) {
 
         String amount  = inputMap.getString("amount");
@@ -75,23 +76,8 @@ public final class HyphenSvc {
         return warnLowBalance(new SharedMap<>(client.transfer(command)));
     }
 
-    /** WX 예금주 조회에서 HYPHEN 기본 계좌명 조회 전문을 구성한다. */
-    public SharedMap<String, Object> holder(String bank, String account) {
-
-        if (bank == null || !bank.matches("[0-9]{3}") || account == null || !account.matches("[0-9]{1,20}")) {
-            throw new IllegalArgumentException("예금주 조회 계좌를 확인하세요.");
-        }
-        if (isTest()) {
-            return HyphenStub.holder(profileMap.getString("hqId"), bank, account);
-        }
-
-        INet command = request()
-                .data("recvBankCd", bank)
-                .data("recvAccount", account);
-        return new SharedMap<>(new HyphenPisp().holder(command));
-    }
-
     /** 본사 미결 송금 확인에 원거래 기관번호를 사용해 HYPHEN 결과 조회 전문을 구성한다. */
+    @Override
     public SharedMap<String, Object> transferResult(String acqTrxId) {
 
         if (acqTrxId == null || !acqTrxId.matches("[0-9]{12}")) {
@@ -105,6 +91,7 @@ public final class HyphenSvc {
     }
 
     /** 직접 잔액조회: 동일한 보호 프로필의 본사 계좌를 사용한다. */
+    @Override
     public SharedMap<String, Object> balance() {
 
         if (isTest()) {

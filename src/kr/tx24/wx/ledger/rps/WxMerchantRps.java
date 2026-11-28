@@ -20,6 +20,7 @@ import kr.tx24.wx.ledger.enm.LedgerCode;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.ledger.utils.LedgerIp;
 import kr.tx24.wx.api.WalletPolicy;
+import kr.tx24.wx.api.Acquirer;
 
 import static kr.tx24.wx.ledger.rps.WxDatabaseRps.rows;
 
@@ -103,8 +104,9 @@ public final class WxMerchantRps {
 
         String                          walletId   = keyMap.getString("walletId");
         List<SharedMap<String, Object>> walletList = rows(db, """
-                SELECT B.balance,B.available AS availableBalance,W.status,W.apiStatus
+                SELECT B.balance,B.available AS availableBalance,W.status,W.apiStatus,H.acq
                   FROM WX.WALLET W JOIN WX.WALLET_BALANCE B ON B.walletId=W.id
+                  LEFT JOIN WX.HQ_ACCNT H ON H.id=W.hqId
                  WHERE W.id=? AND W.mchtId=? AND W.ownerType='MCHT'
                 """, walletId, company);
         if (walletList.size() != 1) {
@@ -137,6 +139,7 @@ public final class WxMerchantRps {
             case "inquiry":
                 return inquiry(db, inMap, company, walletId);
             case "payout":
+                requireActiveAcquirer(walletMap);
                 requireServiceWindow(db, "transfer");
                 return WxTransferRps.accept(db, inMap, company, walletId, WxPostingRps.postingTime(db));
             case "holder":
@@ -164,7 +167,7 @@ public final class WxMerchantRps {
                         +" SELECT ?,k.mchtId,k.walletId,?,k.idx,?,'WX_API',DATE_FORMAT(CURRENT_DATE(),'%Y%m%d')"
                         +" FROM WX.WALLET_API_KEY k WHERE k.keyHash=? AND k.walletId=? AND k.status='사용' AND k.revokedAt IS NULL AND (k.expiresAt IS NULL OR k.expiresAt>NOW())",
                         id,inMap.getString("apiCode"),inMap.getString("requestHash"),inMap.getString("keyHash"),inMap.getString("walletId"));
-            } else if (inMap.isEquals("phase","completed") && inMap.getString("resultCd").matches("[A-Z0-9]{4}") && inMap.getString("trackId").length()<=128) {
+            } else if (inMap.isEquals("phase","completed") && inMap.getString("resultCd").matches("[A-Z0-9]{1,24}") && inMap.getString("trackId").length()<=128) {
                 // 결과 문구는 길이로 거절하지 않고 열 길이로 자른다. 문구를 못 담는 것이
                 // 이력 한 건을 접수로 남기는 것보다 가볍다.
                 count=WxDatabaseRps.update(db,"UPDATE WX.TRX_IO i JOIN WX.WALLET_API_KEY k ON k.idx=i.apiKeyIdx"
@@ -312,6 +315,14 @@ public final class WxMerchantRps {
         return SharedMap.<String, Object>of()
                 .add("rootResultCd", code)
                 .add("rootResultMsg", message);
+    }
+
+    /** 송금은 모계좌의 기관이 미사용이면 접수 전에 거절한다. */
+    static void requireActiveAcquirer(SharedMap<String, Object> bankMap) {
+
+        if (Acquirer.from(bankMap.getString("acq")).isInactive()) {
+            throw new LedgerEx(LedgerCode.INACTIVE_ACQUIRER, WalletPolicy.INACTIVE_ACQUIRER_MSG);
+        }
     }
 
     /** 송금·예금주 조회: WX DB에 승인된 업무 운영시간을 우선 적용한다. */

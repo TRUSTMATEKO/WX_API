@@ -1,7 +1,9 @@
 package kr.tx24.wx.api.rps;
 
+import kr.tx24.lib.db.Retrieve;
 import kr.tx24.lib.map.SharedMap;
 import kr.tx24.wx.api.WalletException;
+import kr.tx24.wx.api.WalletPolicy;
 import kr.tx24.wx.ledger.ex.LedgerEx;
 import kr.tx24.wx.ledger.rps.WxDepositRps;
 import kr.tx24.wx.ledger.rps.WxHealthRps;
@@ -124,8 +126,17 @@ public final class WalletLedgerRps {
         return WxTransferRps.expireUnsent(trxId);
     }
 
+    /** 모든 고객사가 공유하는 예금주 조회 기관의 설정 한 행을 읽는다. */
+    public SharedMap<String, Object> holderConfig() {
+
+        return new Retrieve("WX.CONFIG")
+                .columns("apiEnv,holderAcq,holderOrgCode,holderBankCd,holderKey1Enc,holderKey2Enc,holderSeed,holderIvEnc")
+                .where("id", 1)
+                .select().getRow(0);
+    }
+
     /**
-     * 예금주 조회 접수: 요청을 기록하고 기관 조회 프로필을 돌려준다.
+     * 예금주 조회 접수: 요청을 기록하고 조회 대상 계좌를 돌려준다.
      *
      * <p>조회 대상 계좌번호의 마스킹과 암호화는 원장이 수행한다.</p>
      */
@@ -326,12 +337,13 @@ public final class WalletLedgerRps {
         SharedMap<String, Object> errorMap = error(refused);
         if (errorMap.isEquals("code", "TX409")) {
             String walletCode = switch (refused.getCode()) {
-                case DUPLICATE_REQUEST    -> "W011";
-                case LIMIT_EXCEEDED       -> "W012";
-                case KEY_WALLET_ERROR     -> "W013";
-                case WALLET_UNAVAILABLE   -> "W014";
-                case INSUFFICIENT_BALANCE -> "W015";
-                case REQUEST_UNAVAILABLE  -> "W016";
+                case DUPLICATE_REQUEST    -> "W006";
+                case LIMIT_EXCEEDED       -> "W007";
+                case KEY_WALLET_ERROR     -> "W008";
+                case WALLET_UNAVAILABLE   -> "W011";
+                case INSUFFICIENT_BALANCE -> "W012";
+                case REQUEST_UNAVAILABLE  -> "W013";
+                case INACTIVE_ACQUIRER    -> WalletPolicy.INACTIVE_ACQUIRER;
                 default                   -> "W004";
             };
             errorMap.put("walletCode", walletCode);

@@ -22,7 +22,19 @@ TX24_LIB의 `kr.tx24.inet.server.INetServer`를 실행한다.
 - 송금은 Authorization 키와 등록 IP 확인 후, 연결 Wallet ID와 지급 관련 입력 전체로 계산한 HMAC-SHA256 `checksum`을 검증한다. 필드 순서와 예제는 Wallet API HTML의 송금 절에 있다.
 - 업무 JSON은 `resultCd`, `resultMsg`(간략), `advanceMsg`(상세), `createAt`을 항상 제공한다. 송금과 원거래 조회는 원거래 `requestedAt`과 `createAt`, 마스킹 `accntNo` 및 같은 거래 필드를 사용한다.
 
-## HYPHEN 가동 조건
+## 예금주 조회 기관 설정
+
+모든 고객사의 예금주 조회는 `WX.CONFIG`의 `id=1` 행에서 `holderAcq`와 `holderOrgCode`를 읽는다. `apiEnv=test`이면 기관 시험망, `prod`이면 운영망으로 연결한다. 기관별로 다음 값을 설정한다.
+
+| holderAcq | 추가 계약 설정 |
+| --- | --- |
+| HYPHEN | `holderKey1Enc`에 전문 키 |
+| COOCON | `holderKey1Enc`에 API 키, `holderBankCd`에 계약 은행코드 3자리 |
+| DOZN | `holderKey1Enc`에 API 키. SEED-CBC 계약은 `holderSeed=1`로 설정하고 `holderKey2Enc`와 `holderIvEnc`에 각각 16바이트 키와 IV를 저장 |
+
+`Enc` 컬럼에는 TX24_LIB의 `KMSUtils.encrypt(String)`으로 암호화한 값을 저장한다. 필수 설정이 누락되면 조회 접수 전에 `W015`를 반환한다.
+
+## HYPHEN 송금 가동 조건
 
 TX24_EXT의 `hyphen` 원본 패키지를 사용한다. `test`에서는 시험 응답을 사용하고 `prod`에서는 기관 전문을 전송한다. 기관 전송 전에 전문번호와 예약을 저장하고, 결과 불명은 원거래 재조회로 확정하며, 최종 원장 반영의 중복을 차단한다.
 
